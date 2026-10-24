@@ -21,6 +21,7 @@ pub fn schema_builder() -> SchemaBuilder {
     Schema::new(DbBackend::Postgres)
         .builder()
         .register(schema_migration::Entity)
+        .register(crate::audit::event::Entity)
 }
 
 /// Opens the connection pool. Call only after [`migrate::migrate`] has succeeded.
