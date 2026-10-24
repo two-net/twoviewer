@@ -1,2 +1,4 @@
 /target
 .DS_Store
+# Secrets are provided at runtime, never committed (SEC-13).
+.env

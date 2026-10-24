@@ -1,6 +1,6 @@
 # Database migrations
 
-The data model is defined in code as SeaORM entities (`server/src/db`), and every entity is registered in `db::schema_builder()`. The SQL files in this directory are generated from that model. They are embedded in the server, which applies pending ones at startup before it serves traffic (§5.1 of the SRS).
+The data model is defined in code as SeaORM entities (`server/src/db`), and every entity is registered in `db::schema_builder()`. The SQL files in this directory are generated from that model. They are embedded in the server, which applies pending ones at startup before it serves traffic (§5.1 of the SRS), and reports ready only after that ([`../README.md`](../README.md)).
 
 ## Changing the schema
 

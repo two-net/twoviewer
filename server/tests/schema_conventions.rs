@@ -4,7 +4,7 @@
 mod common;
 
 use chrono::Utc;
-use common::{execute, postgres};
+use common::{LOCK_TIMEOUT, execute, postgres};
 use sea_orm::{ActiveModelTrait, DbBackend, Schema, Set, SqlErr};
 use sqlx::{Connection, PgConnection};
 use twoviewer_server::db::{self, EmailAddress, migrate};
@@ -110,7 +110,7 @@ mod example {
 async fn migrated_schema_follows_the_conventions() {
     let (_postgres, url) = postgres().await;
 
-    migrate::migrate(&url).await.unwrap();
+    migrate::migrate(&url, LOCK_TIMEOUT).await.unwrap();
 
     assert_eq!(violations(&url).await, Vec::<String>::new());
 }

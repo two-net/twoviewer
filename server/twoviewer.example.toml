@@ -1,0 +1,33 @@
+# TwoViewer server configuration, with every setting at its default.
+#
+# Point TWOVIEWER_CONFIG at a copy of this file to use it. Environment variables override it:
+# TWOVIEWER_<SECTION>__<SETTING>, for example TWOVIEWER_HTTP__LISTEN=0.0.0.0:80. Durations are
+# written like "500ms", "10s", "5m" or "24h".
+#
+# Secrets do not belong here. The database URL comes only from the DATABASE_URL environment
+# variable (SEC-13).
+
+[http]
+# Address of the public listener. It opens only once migrations have completed (DB-05).
+listen = "0.0.0.0:8080"
+# How long shutdown waits for open requests and connections before closing them.
+shutdown_timeout = "30s"
+
+[monitoring]
+# Address of the monitoring listener (/livez, /readyz, /metrics). It opens as soon as the server
+# starts. Keep it private: it is not meant to be reachable from the internet.
+listen = "0.0.0.0:9090"
+# How long the readiness check waits for the database before reporting not ready.
+readiness_timeout = "2s"
+
+[database]
+# How long a migration waits for a table lock before it fails, so that a blocked migration
+# cannot queue live traffic behind it (REL-02).
+migration_lock_timeout = "10s"
+
+[log]
+# "json" (one object per line, for log collectors) or "text" (for development).
+format = "json"
+# Which logs to write, as tracing filter directives, such as "info" or
+# "info,twoviewer_server=debug".
+filter = "info"

@@ -2,7 +2,9 @@
 
 mod common;
 
-use common::{execute, postgres};
+use std::time::Duration;
+
+use common::{LOCK_TIMEOUT, execute, postgres};
 use sqlx::{AssertSqlSafe, Connection, PgConnection};
 use tokio::task::JoinSet;
 use twoviewer_server::db::migrate::{self, MIGRATIONS, Migration, MigrationError};
@@ -47,7 +49,7 @@ async fn table_exists(url: &str, name: &str) -> bool {
 async fn empty_database_gets_the_complete_schema_and_no_data() {
     let (_postgres, url) = postgres().await;
 
-    let report = migrate::migrate(&url).await.unwrap();
+    let report = migrate::migrate(&url, LOCK_TIMEOUT).await.unwrap();
 
     let applied: Vec<_> = report.applied.into_iter().map(|m| m.id).collect();
     assert!(!applied.is_empty());
@@ -95,9 +97,9 @@ async fn empty_database_gets_the_complete_schema_and_no_data() {
 #[tokio::test]
 async fn current_schema_applies_nothing() {
     let (_postgres, url) = postgres().await;
-    migrate::migrate(&url).await.unwrap();
+    migrate::migrate(&url, LOCK_TIMEOUT).await.unwrap();
 
-    let report = migrate::migrate(&url).await.unwrap();
+    let report = migrate::migrate(&url, LOCK_TIMEOUT).await.unwrap();
 
     assert!(report.applied.is_empty());
     assert_eq!(applied_ids(&url).await, ids(MIGRATIONS));
@@ -111,7 +113,7 @@ async fn failed_migration_is_rolled_back() {
         sql: "CREATE TABLE bad_table (id integer); SELECT no_such_column",
     };
 
-    let err = migrate::run(&url, &with(&[OK, bad]), "test")
+    let err = migrate::run(&url, &with(&[OK, bad]), "test", LOCK_TIMEOUT)
         .await
         .unwrap_err();
 
@@ -125,12 +127,50 @@ async fn failed_migration_is_rolled_back() {
 }
 
 #[tokio::test]
+async fn migration_blocked_by_a_table_lock_fails_after_the_lock_timeout() {
+    let (_postgres, url) = postgres().await;
+    migrate::run(&url, &with(&[OK]), "test", LOCK_TIMEOUT)
+        .await
+        .unwrap();
+    // A long transaction holds a lock that the next migration needs.
+    let mut blocker = PgConnection::connect(&url).await.unwrap();
+    sqlx::raw_sql("BEGIN; LOCK TABLE ok_table IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut blocker)
+        .await
+        .unwrap();
+    let blocked = Migration {
+        id: "99990101000001_blocked",
+        sql: "ALTER TABLE ok_table ADD COLUMN name text",
+    };
+
+    let err = migrate::run(
+        &url,
+        &with(&[OK, blocked]),
+        "test",
+        Duration::from_millis(100),
+    )
+    .await
+    .unwrap_err();
+
+    // REL-02: the migration gave up instead of queueing traffic behind it.
+    let MigrationError::Failed { id, source } = &err else {
+        panic!("{err}");
+    };
+    assert_eq!(id, blocked.id);
+    let code = source.as_database_error().and_then(|e| e.code());
+    assert_eq!(code.as_deref(), Some("55P03"), "{source}"); // lock_not_available
+    assert_eq!(applied_ids(&url).await, ids(&with(&[OK])));
+}
+
+#[tokio::test]
 async fn unknown_applied_migration_is_refused() {
     let (_postgres, url) = postgres().await;
     // A newer application version applied a migration this one does not have.
-    migrate::run(&url, &with(&[OK]), "newer").await.unwrap();
+    migrate::run(&url, &with(&[OK]), "newer", LOCK_TIMEOUT)
+        .await
+        .unwrap();
 
-    let err = migrate::migrate(&url).await.unwrap_err();
+    let err = migrate::migrate(&url, LOCK_TIMEOUT).await.unwrap_err();
 
     assert!(
         matches!(&err, MigrationError::UnknownMigration { id } if id == OK.id),
@@ -141,13 +181,15 @@ async fn unknown_applied_migration_is_refused() {
 #[tokio::test]
 async fn changed_applied_migration_is_refused() {
     let (_postgres, url) = postgres().await;
-    migrate::run(&url, &with(&[OK]), "test").await.unwrap();
+    migrate::run(&url, &with(&[OK]), "test", LOCK_TIMEOUT)
+        .await
+        .unwrap();
     let changed = Migration {
         sql: "CREATE TABLE ok_table (id bigint)",
         ..OK
     };
 
-    let err = migrate::run(&url, &with(&[changed, LATER]), "test")
+    let err = migrate::run(&url, &with(&[changed, LATER]), "test", LOCK_TIMEOUT)
         .await
         .unwrap_err();
 
@@ -161,9 +203,11 @@ async fn changed_applied_migration_is_refused() {
 #[tokio::test]
 async fn pending_migration_older_than_the_newest_applied_is_refused() {
     let (_postgres, url) = postgres().await;
-    migrate::run(&url, &with(&[LATER]), "test").await.unwrap();
+    migrate::run(&url, &with(&[LATER]), "test", LOCK_TIMEOUT)
+        .await
+        .unwrap();
 
-    let err = migrate::run(&url, &with(&[OK, LATER]), "test")
+    let err = migrate::run(&url, &with(&[OK, LATER]), "test", LOCK_TIMEOUT)
         .await
         .unwrap_err();
 
@@ -179,7 +223,7 @@ async fn database_with_tables_but_no_history_is_refused() {
     let (_postgres, url) = postgres().await;
     execute(&url, "CREATE TABLE stray (id integer)").await;
 
-    let err = migrate::migrate(&url).await.unwrap_err();
+    let err = migrate::migrate(&url, LOCK_TIMEOUT).await.unwrap_err();
 
     assert!(
         matches!(err, MigrationError::NotEmptyWithoutHistory),
@@ -201,7 +245,7 @@ async fn concurrent_instances_apply_each_migration_once() {
     let mut instances = JoinSet::new();
     for _ in 0..4 {
         let (url, migrations) = (url.clone(), migrations.clone());
-        instances.spawn(async move { migrate::run(&url, &migrations, "test").await });
+        instances.spawn(async move { migrate::run(&url, &migrations, "test", LOCK_TIMEOUT).await });
     }
     let reports: Vec<_> = instances
         .join_all()

@@ -1,51 +1,47 @@
 use std::process::ExitCode;
 
+use tokio::net::TcpListener;
 use tracing::{error, info};
-use tracing_subscriber::EnvFilter;
-use twoviewer_server::db;
+use twoviewer_server::{
+    app,
+    config::{Config, Secrets},
+    telemetry,
+};
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
-
-    let Ok(database_url) = std::env::var("DATABASE_URL") else {
-        error!("DATABASE_URL is not set");
-        return ExitCode::FAILURE;
-    };
-
-    // DB-05: the schema is current before anything serves traffic. On failure, exit without
-    // serving (DB-06).
-    match db::migrate::migrate(&database_url).await {
-        Ok(report) => info!(
-            applied = ?report.applied.iter().map(|m| &m.id).collect::<Vec<_>>(),
-            elapsed_ms = report.elapsed.as_millis(),
-            version = env!("CARGO_PKG_VERSION"),
-            "database schema is current"
-        ),
+    // Logging is set up from the configuration, so errors until then go to standard error.
+    let (config, secrets) = match Config::load().and_then(|c| Ok((c, Secrets::from_env()?))) {
+        Ok(loaded) => loaded,
         Err(err) => {
-            error!(error = %err, "database migration failed; exiting");
+            eprintln!("error: {err}");
             return ExitCode::FAILURE;
+        }
+    };
+    if let Err(err) = telemetry::init(&config.log) {
+        eprintln!("error: {err}");
+        return ExitCode::FAILURE;
+    }
+    // The configuration holds no secrets; they are in `secrets`.
+    info!(?config, "configuration loaded");
+
+    let monitoring = match TcpListener::bind(config.monitoring.listen).await {
+        Ok(listener) => listener,
+        Err(err) => {
+            error!(address = %config.monitoring.listen, error = %err, "cannot listen; exiting");
+            return ExitCode::FAILURE;
+        }
+    };
+    match app::run(config, secrets, monitoring, shutdown_signal()).await {
+        Ok(()) => {
+            info!("stopped");
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            error!(error = %err, "exiting");
+            ExitCode::FAILURE
         }
     }
-
-    let db = match db::connect(&database_url).await {
-        Ok(db) => db,
-        Err(err) => {
-            error!(error = %err, "cannot connect to the database; exiting");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    // #12 starts the HTTP listener here and reports ready only from this point (MNT-02).
-    info!("started");
-    shutdown_signal().await;
-    info!("shutting down");
-    let _ = db.close().await;
-    ExitCode::SUCCESS
 }
 
 async fn shutdown_signal() {

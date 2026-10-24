@@ -26,7 +26,7 @@ pub struct Migration<'a> {
 pub static MIGRATIONS: &[Migration<'static>] = include!(concat!(env!("OUT_DIR"), "/migrations.rs"));
 
 /// Advisory lock key that serialises migration runs across instances: ASCII "twoviewr".
-const LOCK_KEY: i64 = 0x7477_6f76_6965_7772;
+pub const LOCK_KEY: i64 = 0x7477_6f76_6965_7772;
 
 #[derive(Debug)]
 pub struct MigrationReport {
@@ -72,8 +72,19 @@ pub enum MigrationError {
 }
 
 /// Applies the embedded migrations, recording this application's version with each.
-pub async fn migrate(database_url: &str) -> Result<MigrationReport, MigrationError> {
-    run(database_url, MIGRATIONS, env!("CARGO_PKG_VERSION")).await
+///
+/// A migration that waits longer than `lock_timeout` for a table lock fails.
+pub async fn migrate(
+    database_url: &str,
+    lock_timeout: Duration,
+) -> Result<MigrationReport, MigrationError> {
+    run(
+        database_url,
+        MIGRATIONS,
+        env!("CARGO_PKG_VERSION"),
+        lock_timeout,
+    )
+    .await
 }
 
 /// Applies `migrations`, which must be sorted by identifier, recording `app_version` with each.
@@ -81,13 +92,14 @@ pub async fn run(
     database_url: &str,
     migrations: &[Migration<'_>],
     app_version: &str,
+    lock_timeout: Duration,
 ) -> Result<MigrationReport, MigrationError> {
     debug_assert!(migrations.windows(2).all(|pair| pair[0].id < pair[1].id));
     let started = Instant::now();
 
     // A dedicated connection, not a pooled one: the advisory lock belongs to this session.
     let mut conn = PgConnection::connect(database_url).await?;
-    let result = run_locked(&mut conn, migrations, app_version).await;
+    let result = run_locked(&mut conn, migrations, app_version, lock_timeout).await;
     // Ending the session releases the lock, also on error. If closing fails, the server ends the
     // session when the connection drops.
     let _ = conn.close().await;
@@ -102,6 +114,7 @@ async fn run_locked(
     conn: &mut PgConnection,
     migrations: &[Migration<'_>],
     app_version: &str,
+    lock_timeout: Duration,
 ) -> Result<Vec<AppliedMigration>, MigrationError> {
     lock(conn).await?;
     let applied = applied_checksums(conn).await?;
@@ -113,7 +126,7 @@ async fn run_locked(
     let mut report = Vec::with_capacity(pending.len());
     for migration in pending {
         let started = Instant::now();
-        apply(conn, migration, app_version)
+        apply(conn, migration, app_version, lock_timeout)
             .await
             .map_err(|source| MigrationError::Failed {
                 id: migration.id.to_owned(),
@@ -122,7 +135,7 @@ async fn run_locked(
         let elapsed = started.elapsed();
         info!(
             migration = migration.id,
-            elapsed_ms = elapsed.as_millis(),
+            elapsed_ms = elapsed.as_millis() as u64,
             "applied migration"
         );
         report.push(AppliedMigration {
@@ -218,11 +231,13 @@ async fn apply(
     conn: &mut PgConnection,
     migration: &Migration<'_>,
     app_version: &str,
+    lock_timeout: Duration,
 ) -> Result<(), sqlx::Error> {
     let mut tx = conn.begin().await?;
     // Fail rather than wait long for a table lock, so a blocked migration cannot queue live
-    // traffic behind it (REL-02). #12 makes this configurable.
-    sqlx::raw_sql("SET LOCAL lock_timeout = '10s'")
+    // traffic behind it (REL-02). `true` limits the setting to this transaction.
+    sqlx::query("SELECT set_config('lock_timeout', $1, true)")
+        .bind(format!("{}ms", lock_timeout.as_millis()))
         .execute(&mut *tx)
         .await?;
     #[expect(

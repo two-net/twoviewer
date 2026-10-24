@@ -19,7 +19,10 @@ use testcontainers_modules::{
     postgres::Postgres,
     testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner},
 };
-use twoviewer_server::db::{self, migrate::Migration};
+use twoviewer_server::{
+    config,
+    db::{self, migrate::Migration},
+};
 
 const POSTGRES_TAG: &str = "18-alpine";
 
@@ -224,7 +227,8 @@ async fn migrated_database(
         .iter()
         .map(|(id, sql)| Migration { id, sql })
         .collect();
-    db::migrate::run(&url, &migrations, "xtask").await?;
+    let lock_timeout = config::Database::default().migration_lock_timeout;
+    db::migrate::run(&url, &migrations, "xtask", lock_timeout).await?;
     Ok(url)
 }
 

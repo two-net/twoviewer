@@ -1,10 +1,15 @@
 //! Helpers shared by the integration tests.
 
+use std::time::Duration;
+
 use sqlx::{Connection, PgConnection};
 use testcontainers_modules::{
     postgres::Postgres,
     testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner},
 };
+
+/// The default lock timeout for migrations (`database.migration_lock_timeout`).
+pub const LOCK_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A PostgreSQL server for one test, removed when dropped, and the URL of its database.
 pub async fn postgres() -> (ContainerAsync<Postgres>, String) {

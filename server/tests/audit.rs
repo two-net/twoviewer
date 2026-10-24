@@ -4,7 +4,7 @@ mod common;
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-use common::{execute, postgres};
+use common::{LOCK_TIMEOUT, execute, postgres};
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DbBackend, Statement, TransactionTrait, prelude::Uuid,
 };
@@ -46,7 +46,7 @@ fn device_renamed() -> Event {
 /// A migrated database and a connection pool to it.
 async fn database() -> (ContainerAsync<Postgres>, String, DatabaseConnection) {
     let (postgres, url) = postgres().await;
-    migrate::migrate(&url).await.unwrap();
+    migrate::migrate(&url, LOCK_TIMEOUT).await.unwrap();
     let db = db::connect(&url).await.unwrap();
     (postgres, url, db)
 }
