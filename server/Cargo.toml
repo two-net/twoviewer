@@ -1,0 +1,6 @@
+[package]
+name = "twoviewer-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
