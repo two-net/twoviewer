@@ -1,0 +1,8 @@
+# DB-16: data access goes through the ORM; hand-written SQL is a static string with bind parameters.
+# Where SQL built at runtime is unavoidable, allow it on that statement with
+# `#[expect(clippy::disallowed_methods, reason = "...")]`.
+disallowed-methods = [
+    { path = "sqlx::AssertSqlSafe", reason = "SQL built at runtime can carry injected values; use the ORM or a static query with bind parameters (DB-16)" },
+    { path = "sea_orm::Statement::from_string", reason = "SQL built at runtime can carry injected values; use the ORM or `Statement::from_sql_and_values` (DB-16)" },
+    { path = "sea_orm::ConnectionTrait::execute_unprepared", reason = "unprepared SQL takes no bind parameters; use the ORM or a statement with values (DB-16)" },
+]

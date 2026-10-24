@@ -15,6 +15,32 @@ Both commands start a throwaway PostgreSQL container, as do the tests in `server
 export DOCKER_HOST=$(docker context inspect -f '{{.Endpoints.docker.Host}}')
 ```
 
+## Entity conventions
+
+Every entity follows these rules (§5.1 of the SRS). `cargo test -p twoviewer-server --test schema_conventions` checks the migrated schema against them. The `convention_example` entity in that test is a complete reference.
+
+- **Random UUID keys** (DB-15). Identifiers end up in URLs, so they must be hard to guess: no serial, identity or integer keys. The database generates a random UUIDv4. Leave `id` unset on insert, and `ActiveModel::insert` returns it:
+
+  ```rust
+  #[sea_orm(primary_key, auto_increment = false, default_expr = "Expr::cust(\"gen_random_uuid()\")")]
+  pub id: Uuid,
+  ```
+
+  A table keyed by its parent's ID (one-to-one) has no default. Its key is a foreign key instead.
+- **UTC timestamps** (DB-14). Every point in time is a `DateTimeUtc` (`timestamp with time zone`), never `DateTime` or `NaiveDateTime`. Database sessions run in UTC.
+- **Integrity in the database** (DB-13), declared in the entity:
+  - A field is an `Option` only when its absence means something, such as `revoked_at`. Everything else is `NOT NULL`.
+  - A reference is a foreign key: `#[sea_orm(belongs_to, from = "user_id", to = "id")]`. Index its column with `#[sea_orm(indexed)]`, so deleting the referenced row doesn't scan the table.
+  - Natural keys are `unique` (one column) or `unique_key = "<name>"` (several).
+  - Email addresses are unique regardless of case: store them as `db::EmailAddress`, which lowercases, and let the database reject anything else:
+
+    ```rust
+    #[sea_orm(unique, extra = "CHECK (email = lower(email))")]
+    pub email: EmailAddress,
+    ```
+- **No partitioning** (DB-11): no `PARTITION BY`, table inheritance, foreign tables or sharding. Large tables, such as audit events, stay fast through indexes and batched retention deletes (RET-02).
+- **Data access through the ORM** (DB-16). Query with SeaORM. sqlx is used directly only by the migration runner, which needs a session-level advisory lock. Write SQL by hand only where the ORM is too slow, as a static string with bind parameters. Never `format!` values into SQL. Clippy rejects the APIs that run SQL built at runtime (`clippy.toml`). Where one is unavoidable, add `#[expect(clippy::disallowed_methods, reason = "...")]` on that statement.
+
 ## Rules
 
 - **Never edit an applied migration.** The server stores each file's checksum and refuses to start if a file has changed. Correct mistakes with a new migration (DB-12).

@@ -1,10 +1,9 @@
 //! Startup migrations against a real PostgreSQL (DB-05 to DB-10). Needs Docker.
 
+mod common;
+
+use common::{execute, postgres};
 use sqlx::{AssertSqlSafe, Connection, PgConnection};
-use testcontainers_modules::{
-    postgres::Postgres,
-    testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner},
-};
 use tokio::task::JoinSet;
 use twoviewer_server::db::migrate::{self, MIGRATIONS, Migration, MigrationError};
 
@@ -17,21 +16,6 @@ const LATER: Migration = Migration {
     id: "99990101000002_later",
     sql: "CREATE TABLE later_table (id integer)",
 };
-
-/// A PostgreSQL server for one test, removed when dropped, and the URL of its database.
-async fn postgres() -> (ContainerAsync<Postgres>, String) {
-    let container = Postgres::default()
-        .with_tag("18-alpine")
-        .start()
-        .await
-        .expect("start a PostgreSQL container (is Docker running?)");
-    let url = format!(
-        "postgres://postgres:postgres@{}:{}/postgres",
-        container.get_host().await.unwrap(),
-        container.get_host_port_ipv4(5432).await.unwrap()
-    );
-    (container, url)
-}
 
 /// The embedded migrations followed by `extra`.
 fn with(extra: &[Migration<'static>]) -> Vec<Migration<'static>> {
@@ -57,11 +41,6 @@ async fn table_exists(url: &str, name: &str) -> bool {
         .fetch_one(&mut conn)
         .await
         .unwrap()
-}
-
-async fn execute(url: &str, sql: &'static str) {
-    let mut conn = PgConnection::connect(url).await.unwrap();
-    sqlx::raw_sql(sql).execute(&mut conn).await.unwrap();
 }
 
 #[tokio::test]
@@ -100,6 +79,10 @@ async fn empty_database_gets_the_complete_schema_and_no_data() {
     .await
     .unwrap();
     for table in tables {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the table names come from the catalog"
+        )]
         let rows: i64 =
             sqlx::query_scalar(AssertSqlSafe(format!("SELECT count(*) FROM \"{table}\"")))
                 .fetch_one(&mut conn)

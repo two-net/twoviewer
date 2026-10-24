@@ -1,7 +1,13 @@
 //! PostgreSQL access: the code-first model (DB-02) and startup migrations (DB-05).
+//!
+//! Every entity follows the conventions in `server/migrations/README.md`: random UUID keys, UTC
+//! timestamps, integrity declared in the model, and no partitioning (DB-11, DB-13 to DB-16).
 
+mod email_address;
 pub mod migrate;
 pub mod schema_migration;
+
+pub use email_address::EmailAddress;
 
 use sea_orm::{
     ConnectOptions, Database, DatabaseConnection, DbBackend, DbErr, Schema, SchemaBuilder,

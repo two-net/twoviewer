@@ -225,6 +225,10 @@ async fn apply(
     sqlx::raw_sql("SET LOCAL lock_timeout = '10s'")
         .execute(&mut *tx)
         .await?;
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "migration SQL is embedded at build time from server/migrations"
+    )]
     sqlx::raw_sql(AssertSqlSafe(migration.sql))
         .execute(&mut *tx)
         .await?;

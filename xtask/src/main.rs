@@ -281,6 +281,10 @@ impl Scratch {
     /// Creates an empty database and returns its URL.
     async fn create_database(&self, name: &str) -> Result<String> {
         let mut conn = PgConnection::connect(&format!("{}/postgres", self.url)).await?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the database names are constants in this file"
+        )]
         sqlx::raw_sql(AssertSqlSafe(format!("CREATE DATABASE {name}")))
             .execute(&mut conn)
             .await?;
