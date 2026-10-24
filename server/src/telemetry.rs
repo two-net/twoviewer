@@ -1,6 +1,6 @@
 //! Operational logs (MNT-03): structured, on standard output, and separate from audit events.
 //!
-//! Requests on the public listener log inside a span that carries their correlation ID
+//! Requests on the HTTPS listener log inside a span that carries their correlation ID
 //! ([`crate::http`]), so every line written while handling a request can be traced back to it.
 //! Logs never contain secrets or session content: log identifiers and route templates, not
 //! credentials, request paths, query strings, headers or bodies. Record numbers as `u64` or

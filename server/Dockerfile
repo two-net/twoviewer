@@ -16,6 +16,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM gcr.io/distroless/cc-debian13:nonroot
 # Migrations are embedded in the binary.
 COPY --from=build /usr/local/bin/twoviewer-server /usr/local/bin/
-# Public listener, monitoring listener.
-EXPOSE 8080 9090
+# HTTPS, plain HTTP (redirects to HTTPS), monitoring. Publish 8443 as 443 and 8080 as 80.
+EXPOSE 8443 8080 9090
 ENTRYPOINT ["/usr/local/bin/twoviewer-server"]

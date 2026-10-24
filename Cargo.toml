@@ -15,14 +15,20 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock", "s
 figment = { version = "0.10.19", features = ["env", "toml"] }
 humantime-serde = "1.1.1"
 prometheus-client = "0.25.1"
+rcgen = "0.14.10"
+# rustls and tokio-rustls with ring, which sqlx already uses. Their default features would also
+# build aws-lc-rs.
+rustls = { version = "0.23.46", default-features = false, features = ["logging", "ring", "std", "tls12"] }
 sea-orm = { version = "2.0.4", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-chrono", "with-ipnetwork", "with-json", "with-uuid"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 sqlx = { version = "0.9.0", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls"] }
+tempfile = "3.27.0"
 testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
 thiserror = "2.0.21"
-tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+tokio = { version = "1.54.1", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "time"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["logging", "ring", "tls12"] }
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }

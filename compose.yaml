@@ -34,8 +34,16 @@ services:
     environment:
       DATABASE_URL: postgres://twoviewer:twoviewer@postgres/twoviewer
       TWOVIEWER_LOG__FORMAT: text
+      # A certificate for localhost, generated at startup. Browsers warn that they don't trust it.
+      TWOVIEWER_TLS__SELF_SIGNED: "true"
+      # Redirects from http://localhost:8080 go to the published HTTPS port.
+      TWOVIEWER_HTTP__PUBLIC_PORT: 8443
+      # Browsers would otherwise remember to use only HTTPS for localhost, on every port, which
+      # breaks plain-HTTP development servers such as `ng serve`.
+      TWOVIEWER_HTTP__HSTS_MAX_AGE: 0s
     ports:
-      - 127.0.0.1:8080:8080 # public listener
+      - 127.0.0.1:8443:8443 # HTTPS: the API and web client
+      - 127.0.0.1:8080:8080 # plain HTTP, which redirects to HTTPS
       - 127.0.0.1:9090:9090 # monitoring: /livez, /readyz, /metrics
 
 volumes:

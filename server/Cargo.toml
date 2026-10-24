@@ -9,6 +9,8 @@ chrono.workspace = true
 figment.workspace = true
 humantime-serde.workspace = true
 prometheus-client.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
 # No `schema-sync` here: the server only changes the schema through migrations (DB-03).
 sea-orm.workspace = true
 serde.workspace = true
@@ -17,11 +19,13 @@ sha2.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-rustls.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 figment = { workspace = true, features = ["test"] }
+tempfile.workspace = true
 testcontainers-modules.workspace = true
 tower.workspace = true

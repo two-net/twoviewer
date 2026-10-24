@@ -25,7 +25,7 @@ pub struct Metrics {
     pub relay_bytes: Counter,
     /// Sign-in attempts that failed, for whatever reason.
     pub sign_ins_failed: Counter,
-    /// Answered requests on the public listener, by route and status class. The 5xx share is the
+    /// Answered requests on the HTTPS listener, by route and status class. The 5xx share is the
     /// error rate.
     pub http_requests: Family<HttpLabels, Counter>,
     /// How long the migrations at startup took, including waiting for another instance (DB-07).
@@ -92,7 +92,7 @@ impl Metrics {
         );
         registry.register(
             "http_requests",
-            "Answered requests on the public listener, by route and status class",
+            "Answered requests on the HTTPS listener, by route and status class",
             http_requests.clone(),
         );
         registry.register_with_unit(

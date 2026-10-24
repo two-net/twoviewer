@@ -1,17 +1,38 @@
 # TwoViewer server configuration, with every setting at its default.
 #
 # Point TWOVIEWER_CONFIG at a copy of this file to use it. Environment variables override it:
-# TWOVIEWER_<SECTION>__<SETTING>, for example TWOVIEWER_HTTP__LISTEN=0.0.0.0:80. Durations are
+# TWOVIEWER_<SECTION>__<SETTING>, for example TWOVIEWER_HTTP__LISTEN=0.0.0.0:443. Durations are
 # written like "500ms", "10s", "5m" or "24h".
 #
 # Secrets do not belong here. The database URL comes only from the DATABASE_URL environment
-# variable (SEC-13).
+# variable, and the TLS private key from the file named by tls.private_key_file (SEC-13).
 
 [http]
-# Address of the public listener. It opens only once migrations have completed (DB-05).
-listen = "0.0.0.0:8080"
+# Address of the HTTPS listener. It opens only once migrations have completed (DB-05).
+listen = "0.0.0.0:8443"
+# Address of the plain-HTTP listener, which redirects every request to HTTPS (SEC-01).
+redirect_listen = "0.0.0.0:8080"
+# The port clients reach the HTTPS listener on, where redirects point. It differs from the port
+# in `listen` when a load balancer or container maps ports.
+public_port = 443
+# How long browsers remember to use only HTTPS for the site (HSTS, SEC-01), in whole seconds.
+# "0s" makes them forget it, which suits development on localhost.
+hsts_max_age = "365d"
 # How long shutdown waits for open requests and connections before closing them.
 shutdown_timeout = "30s"
+
+[tls]
+# The certificate of the HTTPS listener (IF-08), as PEM files: the chain, leaf first, and its
+# private key. Renewed files are picked up without a restart. There is no default.
+# certificate_file = "/run/secrets/tls/fullchain.pem"
+# private_key_file = "/run/secrets/tls/privkey.pem"
+# Instead of the files, a self-signed certificate for localhost, generated at startup. Browsers
+# and Host Agents do not trust it: for development only.
+self_signed = false
+# How often the files are checked for a renewed certificate.
+reload_interval = "5m"
+# How long a client gets to complete the TLS handshake before it is disconnected.
+handshake_timeout = "10s"
 
 [monitoring]
 # Address of the monitoring listener (/livez, /readyz, /metrics). It opens as soon as the server

@@ -35,6 +35,8 @@ async fn start(url: &str) -> Server {
     let monitoring = listener.local_addr().unwrap();
     let mut config = Config::default();
     config.http.listen = "127.0.0.1:0".parse().unwrap();
+    config.http.redirect_listen = "127.0.0.1:0".parse().unwrap();
+    config.tls.self_signed = true;
     config.monitoring.readiness_timeout = Duration::from_millis(500);
     config.database.migration_lock_timeout = LOCK_TIMEOUT;
     let secrets = Secrets {

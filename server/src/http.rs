@@ -1,16 +1,22 @@
-//! The public listener: the API and, later, the web client.
+//! The HTTPS listener: the API and, later, the web client.
 //!
 //! Every request gets a correlation ID (MNT-03). It is returned in the `x-request-id` header,
 //! carried by every log line written while handling the request, and available to handlers
 //! through the [`CorrelationId`] extractor for the audit events they record. Every answered
 //! request is counted by route and status class (MNT-04).
+//!
+//! Every response tells browsers to use only HTTPS (SEC-01), and forbids other sites to frame
+//! the web client and scripts from other origins to run in it (SEC-10).
 
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use axum::{
     Router,
     extract::{FromRequestParts, MatchedPath, Request, State},
-    http::{HeaderName, HeaderValue, StatusCode, request::Parts},
+    http::{HeaderName, HeaderValue, StatusCode, header, request::Parts},
     middleware::{self, Next},
     response::Response,
 };
@@ -26,9 +32,24 @@ pub const REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CorrelationId(pub Uuid);
 
-/// The routes of the public listener. Features add theirs here.
-pub fn router(metrics: Arc<Metrics>) -> Router {
-    instrument(Router::new(), metrics)
+/// What the web client may load and who may frame it (SEC-10):
+///
+/// - `frame-ancestors 'none'`: no site may frame it, which protects the consent prompt against
+///   clickjacking.
+/// - `script-src 'self'`: only scripts from the TwoViewer origin run, and no inline scripts or
+///   event handlers. This also keeps out third-party tracking code (PRIV-05).
+/// - `style-src 'unsafe-inline'`, because Angular adds component styles as `<style>` elements.
+/// - `base-uri 'self'` for the `<base href="/">` of `index.html`.
+///
+/// `'self'` includes WebSocket connections to the same host.
+const CONTENT_SECURITY_POLICY: HeaderValue = HeaderValue::from_static(
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+     object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+);
+
+/// The routes of the HTTPS listener. Features add theirs here.
+pub fn router(metrics: Arc<Metrics>, hsts_max_age: Duration) -> Router {
+    secure(instrument(Router::new(), metrics), hsts_max_age)
 }
 
 /// Adds correlation IDs, request logs and request metrics to every route of `router`, and to its
@@ -74,6 +95,35 @@ async fn track(State(metrics): State<Arc<Metrics>>, mut request: Request, next: 
     response.headers_mut().insert(
         REQUEST_ID,
         HeaderValue::try_from(correlation_id.0.to_string()).expect("a UUID is a valid header"),
+    );
+    response
+}
+
+/// Adds the security headers to every response of `router`, and of its fallback. They replace
+/// any that a handler set, so that the policy is in one place.
+fn secure(router: Router, hsts_max_age: Duration) -> Router {
+    // Without `preload`, which is hard to undo.
+    let hsts = HeaderValue::try_from(format!(
+        "max-age={}; includeSubDomains",
+        hsts_max_age.as_secs()
+    ))
+    .expect("digits are a valid header");
+    router.layer(middleware::map_response_with_state(
+        hsts,
+        add_security_headers,
+    ))
+}
+
+async fn add_security_headers(State(hsts): State<HeaderValue>, mut response: Response) -> Response {
+    let headers = response.headers_mut();
+    headers.insert(header::STRICT_TRANSPORT_SECURITY, hsts);
+    headers.insert(header::CONTENT_SECURITY_POLICY, CONTENT_SECURITY_POLICY);
+    // For browsers that do not support `frame-ancestors`.
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    // A response runs as a script only if it is declared as one.
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
     );
     response
 }
@@ -196,6 +246,49 @@ mod tests {
         assert_eq!(count(&metrics, "/fail", "5xx"), 1);
     }
 
+    #[tokio::test]
+    async fn every_response_carries_the_security_headers() {
+        let (routes, _) = app();
+        let router = secure(routes, Duration::from_secs(31_536_000));
+
+        for uri in ["/devices/1", "/fail", "/nothing/here"] {
+            let response = send(&router, uri).await;
+
+            let headers = response.headers();
+            assert_eq!(
+                headers[header::STRICT_TRANSPORT_SECURITY],
+                "max-age=31536000; includeSubDomains",
+                "{uri}"
+            );
+            let csp = headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+            for directive in ["frame-ancestors 'none'", "script-src 'self';"] {
+                assert!(csp.contains(directive), "{uri}: {csp}");
+            }
+            assert_eq!(headers[header::X_FRAME_OPTIONS], "DENY", "{uri}");
+            assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff", "{uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn handlers_cannot_weaken_the_security_headers() {
+        let routes = Router::new().route(
+            "/",
+            get(|| async { ([(header::CONTENT_SECURITY_POLICY, "frame-ancestors *")], "") }),
+        );
+        let router = secure(routes, Duration::ZERO);
+
+        let response = send(&router, "/").await;
+
+        assert_eq!(
+            response.headers()[header::CONTENT_SECURITY_POLICY],
+            CONTENT_SECURITY_POLICY
+        );
+        assert_eq!(
+            response.headers()[header::STRICT_TRANSPORT_SECURITY],
+            "max-age=0; includeSubDomains"
+        );
+    }
+
     /// A log destination that tests can read.
     #[derive(Clone, Default)]
     struct Buffer(Arc<Mutex<Vec<u8>>>);
@@ -230,18 +323,34 @@ mod tests {
         let _guard =
             tracing::subscriber::set_default(telemetry::subscriber(&config, logs.clone()).unwrap());
 
-        let response = send(&router, "/devices/8d2c41?token=s3cr3t").await;
+        // A test on another thread can register the span and event in `track` while this one
+        // installs its subscriber, and so leave them disabled (a race in `tracing-core`). Once
+        // that registration is over, rebuilding the interest cache enables them.
+        let mut attempts = 0;
+        let (line, logs) = loop {
+            let response = send(&router, "/devices/8d2c41?token=s3cr3t").await;
+            let id = request_id(&response).to_string();
+            let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+            let line = logs
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .find(|line| {
+                    line["fields"]["message"] == "request completed"
+                        && line["span"]["correlation_id"] == id
+                });
+            attempts += 1;
+            match line {
+                Some(line) => break (line, logs),
+                None if attempts == 100 => {
+                    panic!("no request log with correlation ID {id}: {logs}")
+                }
+                None => {
+                    tracing::callsite::rebuild_interest_cache();
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }
+        };
 
-        let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
-        let line: serde_json::Value = logs
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .find(|line: &serde_json::Value| line["fields"]["message"] == "request completed")
-            .expect(&logs);
-        assert_eq!(
-            line["span"]["correlation_id"],
-            request_id(&response).to_string()
-        );
         assert_eq!(line["fields"]["route"], "/devices/{id}");
         assert_eq!(line["fields"]["status"], 200);
         assert!(!logs.contains("8d2c41"), "{logs}");

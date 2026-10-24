@@ -44,6 +44,10 @@ To execute unit tests with the [Vitest](https://vitest.dev/) test runner, use th
 ng test
 ```
 
+## Content Security Policy
+
+The server lets only scripts from the TwoViewer origin run in the web client (SEC-10, `server/src/http.rs`), so the built `index.html` must have no inline scripts or event handlers. CI checks this after `npm run build`. That is why the production configuration in `angular.json` turns off critical CSS inlining (`inlineCritical`): it adds an inline script that switches the stylesheet from `media="print"` to all media, which the policy blocks, leaving the page unstyled. Inline styles are allowed, because Angular adds component styles as `<style>` elements.
+
 ## Known vulnerabilities
 
 `npm audit` runs on every change (SEC-15). `package.json` overrides the `vite` version of `@angular/build`, because `@angular/build` 22.2 pins a vite version with known vulnerabilities. Remove the override once a stable `@angular/build` 22.3 or later is out.

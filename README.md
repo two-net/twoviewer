@@ -19,13 +19,18 @@ You need Docker with Buildx, Rust (stable) and Node.js 22. Docker Desktop and Do
 docker compose up --build
 ```
 
-This starts PostgreSQL and the server (MNT-07). The public listener is on <http://localhost:8080>, the monitoring listener on <http://localhost:9090/readyz>. The database keeps its data between runs; `docker compose down --volumes` deletes it.
+This starts PostgreSQL and the server (MNT-07). The server is on <https://localhost:8443>, with a self-signed certificate that the browser warns about; <http://localhost:8080> redirects there. The monitoring listener is on <http://localhost:9090/readyz>. The database keeps its data between runs; `docker compose down --volumes` deletes it.
 
-For a faster edit-and-run loop, start only PostgreSQL and run the server with cargo:
+For a faster edit-and-run loop, start only PostgreSQL and run the server with cargo, with the same development settings as [`compose.yaml`](compose.yaml):
 
 ```sh
 docker compose up --detach postgres
-DATABASE_URL=postgres://twoviewer:twoviewer@localhost:5432/twoviewer TWOVIEWER_LOG__FORMAT=text cargo run -p twoviewer-server
+DATABASE_URL=postgres://twoviewer:twoviewer@localhost:5432/twoviewer \
+TWOVIEWER_LOG__FORMAT=text \
+TWOVIEWER_TLS__SELF_SIGNED=true \
+TWOVIEWER_HTTP__PUBLIC_PORT=8443 \
+TWOVIEWER_HTTP__HSTS_MAX_AGE=0s \
+cargo run -p twoviewer-server
 ```
 
 The web client runs separately with `npm start` in `web/`.
