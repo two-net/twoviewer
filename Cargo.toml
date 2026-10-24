@@ -1,7 +1,22 @@
 [workspace]
 resolver = "3"
-members = ["server", "agent"]
+members = ["server", "agent", "xtask"]
+# Without xtask, so a plain `cargo build` does not unify its `schema-sync` feature into the server.
+default-members = ["server", "agent"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+
+[workspace.dependencies]
+anyhow = "1.0.104"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+sea-orm = { version = "2.0.4", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-chrono"] }
+sha2 = "0.11.1"
+sqlx = { version = "0.9.0", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls"] }
+testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "signal"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+twoviewer-server = { path = "server" }

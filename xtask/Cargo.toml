@@ -1,0 +1,14 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+sea-orm = { workspace = true, features = ["schema-sync"] }
+sqlx.workspace = true
+testcontainers-modules.workspace = true
+tokio.workspace = true
+twoviewer-server.workspace = true
