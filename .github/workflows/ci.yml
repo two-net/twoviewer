@@ -1,0 +1,95 @@
+# Checks every change (MNT-05) and scans third-party components for known vulnerabilities
+# (SEC-15). The nightly run finds advisories published after a change was merged.
+# Third-party actions are pinned to a commit; update the SHA and its version comment together.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The upgrade test reads the previous release's migrations from its tag.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@2201cc584a476d1b508be977bbe4b7d1c7a52e9c # v2.9.3
+      - run: cargo fmt --all --check
+      # Also enforces the SQL rules in clippy.toml (DB-16).
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # Default members only, so xtask's `schema-sync` feature is not unified into the server.
+      # The tests start PostgreSQL containers, including one that applies all migrations to an
+      # empty database and one that upgrades from the previous release.
+      - run: cargo test --locked
+      - name: Migrations match the code model
+        run: cargo xtask check-migrations
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm test -- --watch=false
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Crates with known vulnerabilities
+        uses: EmbarkStudios/cargo-deny-action@c3bbe7e4e3f7baeee1a3dd9aec0a3b2aded580fb # v2.1.1
+        with:
+          command: check
+          command-arguments: advisories
+      - name: npm packages with known vulnerabilities
+        working-directory: web
+        run: npm audit
+
+  # The one-command local start (MNT-07) works, and the server image has no known fixable
+  # vulnerabilities in its operating-system packages.
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker compose up --build --detach --wait
+      - name: The server becomes ready
+        run: curl --fail --silent --show-error --retry 60 --retry-delay 2 --retry-all-errors http://127.0.0.1:9090/readyz
+      - name: Image with known vulnerabilities
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: twoviewer-server
+          ignore-unfixed: true
+          exit-code: "1"
+      - if: failure()
+        run: docker compose logs
+      - if: always()
+        run: docker compose down --volumes

@@ -1,0 +1,42 @@
+# The complete server side for local development (MNT-07): `docker compose up --build`.
+# The database keeps its data between runs; `docker compose down --volumes` deletes it.
+
+name: twoviewer
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      # A local development credential, reachable only from this machine. Real secrets never go
+      # in source control (SEC-13).
+      POSTGRES_USER: twoviewer
+      POSTGRES_PASSWORD: twoviewer
+      POSTGRES_DB: twoviewer
+    volumes:
+      - postgres:/var/lib/postgresql
+    # Published so that `cargo run` and psql can reach it. Set POSTGRES_PORT if 5432 is taken.
+    ports:
+      - 127.0.0.1:${POSTGRES_PORT:-5432}:5432
+    healthcheck:
+      test: [CMD, pg_isready, --username=twoviewer, --dbname=twoviewer]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: twoviewer-server
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://twoviewer:twoviewer@postgres/twoviewer
+      TWOVIEWER_LOG__FORMAT: text
+    ports:
+      - 127.0.0.1:8080:8080 # public listener
+      - 127.0.0.1:9090:9090 # monitoring: /livez, /readyz, /metrics
+
+volumes:
+  postgres:

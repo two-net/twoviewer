@@ -1,8 +1,9 @@
-//! Startup migrations against a real PostgreSQL (DB-05 to DB-10). Needs Docker.
+//! Startup migrations against a real PostgreSQL (DB-05 to DB-10), including the upgrade from the
+//! previous release (MNT-05). Needs Docker.
 
 mod common;
 
-use std::time::Duration;
+use std::{process::Command, time::Duration};
 
 use common::{LOCK_TIMEOUT, execute, postgres};
 use sqlx::{AssertSqlSafe, Connection, PgConnection};
@@ -34,6 +35,51 @@ async fn applied_ids(url: &str) -> Vec<String> {
         .fetch_all(&mut conn)
         .await
         .unwrap()
+}
+
+fn git(args: &[&str]) -> String {
+    let output = Command::new("git")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "git {}: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// The newest release before this commit, from its `v<major>.<minor>.<patch>` tag: its version
+/// and `(id, sql)` of its migrations, in order. `None` before the first release.
+fn previous_release() -> Option<(String, Vec<(String, String)>)> {
+    assert_eq!(
+        git(&["rev-parse", "--is-shallow-repository"]).trim(),
+        "false",
+        "a shallow clone hides the release tags; fetch the full history"
+    );
+    // A build of a release commit upgrades from the release before it. Pre-releases don't count.
+    let tags = git(&[
+        "tag",
+        "--list",
+        "v[0-9]*",
+        "--merged",
+        "HEAD",
+        "--no-contains",
+        "HEAD",
+        "--sort=-v:refname",
+    ]);
+    let tag = tags.lines().find(|tag| !tag.contains('-'))?;
+    let migrations = git(&["ls-tree", "--name-only", tag, "migrations/"])
+        .lines()
+        .filter_map(|path| {
+            let id = path.strip_prefix("migrations/")?.strip_suffix(".sql")?;
+            Some((id.to_owned(), git(&["show", &format!("{tag}:./{path}")])))
+        })
+        .collect();
+    Some((tag.trim_start_matches('v').to_owned(), migrations))
 }
 
 async fn table_exists(url: &str, name: &str) -> bool {
@@ -102,6 +148,35 @@ async fn current_schema_applies_nothing() {
     let report = migrate::migrate(&url, LOCK_TIMEOUT).await.unwrap();
 
     assert!(report.applied.is_empty());
+    assert_eq!(applied_ids(&url).await, ids(MIGRATIONS));
+}
+
+#[tokio::test]
+async fn upgrades_from_the_previous_release() {
+    let Some((version, released)) = previous_release() else {
+        eprintln!("no release yet; nothing to upgrade from");
+        return;
+    };
+    let released: Vec<_> = released
+        .iter()
+        .map(|(id, sql)| Migration { id, sql })
+        .collect();
+    let (_postgres, url) = postgres().await;
+    migrate::run(&url, &released, &version, LOCK_TIMEOUT)
+        .await
+        .unwrap();
+
+    // Fails if a released migration was edited, removed or renamed, or if a new one sorts before
+    // it (DB-09, DB-12).
+    let report = migrate::migrate(&url, LOCK_TIMEOUT).await.unwrap();
+
+    let applied: Vec<_> = report.applied.into_iter().map(|m| m.id).collect();
+    let new: Vec<_> = MIGRATIONS
+        .iter()
+        .filter(|m| released.iter().all(|r| r.id != m.id))
+        .map(|m| m.id.to_owned())
+        .collect();
+    assert_eq!(applied, new, "upgrading from {version}");
     assert_eq!(applied_ids(&url).await, ids(MIGRATIONS));
 }
 

@@ -1,0 +1,10 @@
+# cargo-deny configuration. `cargo deny check advisories` fails the build on crates with known
+# vulnerabilities (SEC-15). Fix them by updating the crate; ignore an advisory only with a reason:
+#   ignore = [{ id = "RUSTSEC-0000-0000", reason = "..." }]
+
+[advisories]
+version = 2
+yanked = "deny"
+# Fail on unmaintained crates we depend on directly; transitive ones are their maintainers' call.
+unmaintained = "workspace"
+ignore = []

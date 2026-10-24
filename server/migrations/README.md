@@ -15,6 +15,13 @@ Both commands start a throwaway PostgreSQL container, as do the tests in `server
 export DOCKER_HOST=$(docker context inspect -f '{{.Endpoints.docker.Host}}')
 ```
 
+## Checks
+
+CI checks every change (MNT-05, [`../../README.md`](../../README.md#checks)):
+
+- `cargo test -p twoviewer-server --test migrate` applies all migrations to an empty database, and upgrades from the previous release. That test applies the migrations of the newest `v<major>.<minor>.<patch>` tag before the current commit, then the current ones. It fails if a released migration was edited, renamed or removed, or if a new one sorts before it. Before the first release, it has nothing to upgrade from and passes.
+- `cargo xtask check-migrations` fails if the migrations and the code model differ.
+
 ## Entity conventions
 
 Every entity follows these rules (§5.1 of the SRS). `cargo test -p twoviewer-server --test schema_conventions` checks the migrated schema against them. The `convention_example` entity in that test is a complete reference.

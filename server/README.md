@@ -4,6 +4,8 @@ The single server application (§2.2 of the SRS). At startup it applies pending 
 
 ## Running
 
+`docker compose up --build` at the repository root starts the server together with PostgreSQL ([`../README.md`](../README.md#running-the-server-side)). The image is built from [`Dockerfile`](Dockerfile). Against a database of your own:
+
 ```sh
 DATABASE_URL=postgres://user:password@localhost/twoviewer cargo run -p twoviewer-server
 ```

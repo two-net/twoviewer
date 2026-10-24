@@ -44,6 +44,10 @@ To execute unit tests with the [Vitest](https://vitest.dev/) test runner, use th
 ng test
 ```
 
+## Known vulnerabilities
+
+`npm audit` runs on every change (SEC-15). `package.json` overrides the `vite` version of `@angular/build`, because `@angular/build` 22.2 pins a vite version with known vulnerabilities. Remove the override once a stable `@angular/build` 22.3 or later is out.
+
 ## Running end-to-end tests
 
 For end-to-end (e2e) testing, run:
