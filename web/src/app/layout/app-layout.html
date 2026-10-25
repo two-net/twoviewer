@@ -1,0 +1,43 @@
+<app-site-header>
+  <button
+    #menuButton
+    type="button"
+    class="button menu-button"
+    aria-controls="primary-nav"
+    [attr.aria-expanded]="menuOpen()"
+    (click)="menuOpen.set(!menuOpen())"
+    i18n
+  >
+    Menu
+  </button>
+  <nav id="primary-nav" class="nav" [class.open]="menuOpen()" aria-label="Main" i18n-aria-label>
+    <ul>
+      <li>
+        <a routerLink="/devices" routerLinkActive="active" ariaCurrentWhenActive="page" i18n>
+          Devices
+        </a>
+      </li>
+      <li>
+        <a routerLink="/connect" routerLinkActive="active" ariaCurrentWhenActive="page" i18n>
+          Connect
+        </a>
+      </li>
+      <li>
+        <a routerLink="/vpn" routerLinkActive="active" ariaCurrentWhenActive="page" i18n>VPN</a>
+      </li>
+      <li>
+        <a routerLink="/audit" routerLinkActive="active" ariaCurrentWhenActive="page" i18n>
+          Audit log
+        </a>
+      </li>
+      <li>
+        <a routerLink="/settings" routerLinkActive="active" ariaCurrentWhenActive="page" i18n>
+          Settings
+        </a>
+      </li>
+    </ul>
+  </nav>
+</app-site-header>
+<main id="main" class="page" tabindex="-1">
+  <router-outlet />
+</main>

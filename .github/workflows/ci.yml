@@ -64,7 +64,17 @@ jobs:
       - name: No inline scripts in the web client
         run: |
           ! grep -nP '<script\b(?![^>]*\bsrc=)|\son[a-z]+\s*=' dist/twoviewer-web/browser/index.html
+      # Nothing is loaded from other origins, such as fonts or tracking code (PRIV-05).
+      - name: Only the TwoViewer origin in the page and styles
+        run: |
+          ! grep -nP '\b(src|href)\s*=\s*"(https?:)?//|url\(\s*["\x27]?(https?:)?//' \
+            dist/twoviewer-web/browser/index.html dist/twoviewer-web/browser/*.css
       - run: npm test -- --watch=false
+      # All user-facing text can be translated later (A11Y-04).
+      - name: Template text is marked for translation
+        run: npm run check:i18n
+      - name: The marked text can be extracted
+        run: npx ng extract-i18n --output-path "$RUNNER_TEMP/i18n"
 
   audit:
     runs-on: ubuntu-latest

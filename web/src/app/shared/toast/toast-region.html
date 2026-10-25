@@ -1,0 +1,23 @@
+<!-- Always present, so that screen readers announce toasts as they appear. -->
+<div class="region" role="status" aria-live="polite">
+  @for (toast of toasts.toasts(); track toast.id) {
+    <div
+      class="toast"
+      (mouseenter)="toasts.hold(toast.id, 'hover')"
+      (mouseleave)="toasts.release(toast.id, 'hover')"
+      (focusin)="toasts.hold(toast.id, 'focus')"
+      (focusout)="toasts.release(toast.id, 'focus')"
+    >
+      <p class="message">{{ toast.message }}</p>
+      <button
+        type="button"
+        class="dismiss"
+        aria-label="Dismiss"
+        i18n-aria-label
+        (click)="toasts.dismiss(toast.id)"
+      >
+        ×
+      </button>
+    </div>
+  }
+</div>

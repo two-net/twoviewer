@@ -1,0 +1,42 @@
+<dialog
+  #dialog
+  class="dialog"
+  aria-labelledby="confirm-title"
+  aria-describedby="confirm-message"
+  (close)="confirmation.answer(false)"
+>
+  @if (confirmation.request(); as request) {
+    <form (submit)="submit($event)">
+      <h2 id="confirm-title">{{ request.title }}</h2>
+      <p id="confirm-message">{{ request.message }}</p>
+      @if (request.typeToConfirm; as expected) {
+        <label for="confirm-typed" i18n>
+          To confirm, type
+          <strong class="expected">{{
+            expected // i18n(ph="text")
+          }}</strong>
+        </label>
+        <input
+          #typedInput
+          id="confirm-typed"
+          class="input"
+          type="text"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          [value]="typed()"
+          (input)="typed.set(typedInput.value)"
+        />
+      }
+      <!-- showModal() focuses the first control: the text field, or else Cancel. -->
+      <div class="actions">
+        <button type="button" class="button" (click)="confirmation.answer(false)" i18n>
+          Cancel
+        </button>
+        <button type="submit" class="button button-danger" [disabled]="!canConfirm()">
+          {{ request.confirmLabel }}
+        </button>
+      </div>
+    </form>
+  }
+</dialog>

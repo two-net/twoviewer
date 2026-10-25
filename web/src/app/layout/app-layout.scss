@@ -1,0 +1,52 @@
+// Narrow windows: the navigation is a list below the bar, opened with the menu button.
+.menu-button {
+  margin-left: auto;
+}
+
+.nav {
+  display: none;
+  flex-basis: 100%;
+
+  &.open {
+    display: block;
+  }
+}
+
+ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+a {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-height);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius);
+  color: var(--color-text);
+  text-decoration: none;
+
+  &.active {
+    color: var(--color-accent);
+    font-weight: 600;
+  }
+}
+
+// Wide windows: the navigation is always shown in the bar.
+@media (min-width: 48rem) {
+  .menu-button {
+    display: none;
+  }
+
+  .nav {
+    display: block;
+    flex-basis: auto;
+    margin-left: auto;
+  }
+
+  ul {
+    display: flex;
+    gap: var(--space-1);
+  }
+}

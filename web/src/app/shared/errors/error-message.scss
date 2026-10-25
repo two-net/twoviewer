@@ -1,0 +1,14 @@
+.error {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-danger);
+  border-left-width: 0.25rem;
+  border-radius: var(--radius);
+
+  p {
+    margin: 0;
+  }
+}
+
+.summary {
+  font-weight: 600;
+}

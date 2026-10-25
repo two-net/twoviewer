@@ -46,6 +46,7 @@ The web client runs separately with `npm start` in `web/`.
 | Server tests, including all migrations on an empty database and the upgrade from the previous release | `cargo test` |
 | The migrations match the code model | `cargo xtask check-migrations` |
 | Web client build and tests | `npm run build` and `npm test -- --watch=false` in `web/` |
+| Web client text is marked for translation ([`web/README.md`](web/README.md#text-and-translation)) | `npm run check:i18n` and `npx ng extract-i18n` in `web/` |
 | Crates with known vulnerabilities ([`deny.toml`](deny.toml)) | `cargo deny check advisories`, after `cargo install --locked cargo-deny` |
 | npm packages with known vulnerabilities | `npm audit` in `web/` |
 | The local start works, and the server image has no fixable vulnerabilities | `docker compose up`, then Trivy on the `twoviewer-server` image |

@@ -1,0 +1,23 @@
+.site-header {
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  max-width: var(--content-width);
+  min-height: 3.5rem;
+  margin-inline: auto;
+  padding: var(--space-2) var(--space-4);
+}
+
+// The logo comes with #16.
+.brand {
+  color: var(--color-text);
+  font-size: 1.25rem;
+  font-weight: 700;
+  text-decoration: none;
+}

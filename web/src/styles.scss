@@ -1,1 +1,167 @@
-/* You can add global styles to this file, and also import other style files */
+// Global styles: design tokens, a small reset and the base look of text, links, buttons and
+// inputs. Components use the tokens, never fixed colors, so that they work in both themes
+// (THM-06).
+//
+// `light-dark()` picks the value for the resolved theme. It follows the operating system's
+// color scheme until the theme option (#18) sets `color-scheme` on `<html>`. The colors are
+// provisional until the palettes are designed (OI-6, #19).
+
+:root {
+  color-scheme: light dark;
+
+  --color-bg: light-dark(#ffffff, #121417);
+  --color-surface: light-dark(#f4f5f7, #1c1f24);
+  --color-text: light-dark(#1b1d21, #e8eaed);
+  --color-text-muted: light-dark(#575c66, #a3a9b3);
+  --color-border: light-dark(#d5d8de, #3a3f47);
+  // Borders that identify a control, such as an input, need more contrast than separators.
+  --color-border-strong: light-dark(#7c828d, #7d848f);
+  --color-accent: light-dark(#1f5fd6, #7aa7ff);
+  --color-on-accent: light-dark(#ffffff, #0b1630);
+  --color-danger: light-dark(#b42318, #ff8a80);
+  --color-on-danger: light-dark(#ffffff, #2a0705);
+  --color-focus: var(--color-accent);
+  --color-backdrop: rgb(0 0 0 / 50%);
+  --shadow: 0 0.25rem 1rem light-dark(rgb(0 0 0 / 15%), rgb(0 0 0 / 60%));
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --radius: 0.375rem;
+  --content-width: 72rem;
+  // Tall enough to tap comfortably.
+  --control-height: 2.75rem;
+
+  // System fonts only: nothing is loaded from another origin (PRIV-05).
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    'Helvetica Neue',
+    Arial,
+    sans-serif;
+  line-height: 1.5;
+  text-size-adjust: 100%;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+h1,
+h2,
+h3 {
+  margin: 0 0 var(--space-4);
+  line-height: 1.25;
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.25rem;
+}
+
+p {
+  margin: 0 0 var(--space-4);
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+a {
+  color: var(--color-accent);
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--control-height);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.button-primary {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+// For destructive actions (UI-03).
+.button-danger {
+  border-color: var(--color-danger);
+  background: var(--color-danger);
+  color: var(--color-on-danger);
+}
+
+.input {
+  width: 100%;
+  min-height: var(--control-height);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+}
+
+// The page content of a layout: from 360 px wide (UI-07) up to a readable width.
+.page {
+  width: 100%;
+  max-width: var(--content-width);
+  margin-inline: auto;
+  padding: var(--space-6) var(--space-4);
+}
+
+// Hidden on screen but read by assistive technologies.
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

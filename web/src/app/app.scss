@@ -1,0 +1,26 @@
+// The footer stays at the bottom of the window on short pages.
+:host {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+app-site-footer {
+  margin-top: auto;
+}
+
+// Shown only when it has keyboard focus.
+.skip-link {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 10;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+  transform: translateY(-200%);
+
+  &:focus {
+    transform: none;
+  }
+}
