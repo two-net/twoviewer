@@ -1,0 +1,84 @@
+<dialog
+  #dialog
+  class="dialog"
+  aria-labelledby="reauthenticate-title"
+  aria-describedby="reauthenticate-message"
+  (close)="cancel()"
+>
+  @if (reauthentication.request(); as request) {
+    <form (submit)="submit($event, request)" novalidate>
+      <h2 id="reauthenticate-title" i18n>Confirm it's you</h2>
+      @if (request.secondFactor) {
+        <p id="reauthenticate-message" i18n>
+          To make this change, enter your password and a code from your authenticator app.
+        </p>
+      } @else {
+        <p id="reauthenticate-message" i18n>To make this change, enter your password.</p>
+      }
+
+      <div class="field">
+        <label for="reauthenticate-password" i18n>Password</label>
+        <input
+          #passwordInput
+          id="reauthenticate-password"
+          class="input"
+          type="password"
+          autocomplete="current-password"
+          [value]="password()"
+          (input)="password.set(passwordInput.value)"
+          [attr.aria-invalid]="errorFor('password') ? 'true' : null"
+          [attr.aria-describedby]="errorFor('password') ? 'reauthenticate-password-error' : null"
+        />
+        @if (errorFor('password'); as message) {
+          <p id="reauthenticate-password-error" class="field-error">{{ message }}</p>
+        }
+      </div>
+
+      @if (request.secondFactor) {
+        <div class="field">
+          <label for="reauthenticate-code" i18n>Code</label>
+          <p id="reauthenticate-code-hint" class="hint" i18n>
+            From your authenticator app, or one of your recovery codes.
+          </p>
+          <input
+            #codeInput
+            id="reauthenticate-code"
+            class="input"
+            type="text"
+            autocomplete="one-time-code"
+            autocapitalize="off"
+            spellcheck="false"
+            [value]="code()"
+            (input)="code.set(codeInput.value)"
+            [attr.aria-invalid]="errorFor('code') ? 'true' : null"
+            [attr.aria-describedby]="
+              errorFor('code')
+                ? 'reauthenticate-code-hint reauthenticate-code-error'
+                : 'reauthenticate-code-hint'
+            "
+          />
+          @if (errorFor('code'); as message) {
+            <p id="reauthenticate-code-error" class="field-error">{{ message }}</p>
+          }
+        </div>
+      }
+
+      @if (error(); as error) {
+        <app-error-message [error]="error" />
+      }
+
+      <div class="actions">
+        <p class="status" role="status">
+          @if (busy()) {
+            <span class="spinner" aria-hidden="true"></span>
+            <span i18n>Checking…</span>
+          }
+        </p>
+        <button type="button" class="button" (click)="cancel()" i18n>Cancel</button>
+        <button type="submit" class="button button-primary" [disabled]="busy()" i18n>
+          Continue
+        </button>
+      </div>
+    </form>
+  }
+</dialog>

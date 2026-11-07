@@ -29,6 +29,43 @@
 //! [`sign_in::sign_in`] says what it does in detail. Handlers that need a signed-in user take
 //! [`SignedIn`], which reads the cookie ([`signed_in`]).
 //!
+//! With MFA on, a right password answers `428` (`second_factor_required`) instead, with the cookie
+//! of a [pending sign-in](pending_sign_in), and the second step completes it (AUTH-05):
+//!
+//! - `POST /api/sign-in/second-factor` takes a code from the authenticator app or an unused
+//!   recovery code, and answers `204` with the cookie of the new sign-in, or `401`, `410` when
+//!   the pending sign-in has expired, `422` or `429` ([`sign_in_second_factor::second_factor`]).
+//!
+//! # MFA
+//!
+//! Users turn MFA with an authenticator app on and off themselves (AUTH-06, [`mfa`]):
+//!
+//! - `GET /api/mfa` says whether it is on, and how many recovery codes are left.
+//! - `POST /api/mfa/setup` stores a new secret and answers it, also as a QR code.
+//! - `POST /api/mfa/confirm` turns MFA on with a code from the app, and answers 10 recovery codes,
+//!   the only time they are shown.
+//! - `DELETE /api/mfa` turns MFA off.
+//!
+//! # Re-authentication
+//!
+//! Sensitive changes need the password, and the second factor if MFA is on, to have been entered
+//! within `sign_in.reauthenticate_after` (15 minutes, AUTH-10): changing the password, email
+//! address or MFA settings, turning on unattended access, and deleting the account. Their handlers
+//! take [`RecentlyAuthenticated`] instead of [`SignedIn`]:
+//!
+//! ```ignore
+//! pub async fn change_password(
+//!     State(accounts): State<Arc<Accounts>>,
+//!     RecentlyAuthenticated(signed_in): RecentlyAuthenticated,
+//!     ...
+//! ) -> Result<StatusCode, ApiError>
+//! ```
+//!
+//! It answers `428` (`reauthentication_required`) otherwise, with `secondFactor` saying whether a
+//! code is needed too. The web client then asks for them, and sends them to
+//! `POST /api/reauthenticate` ([`reauthenticate::reauthenticate`]), which answers `204`, `401`,
+//! `422` or `429`, before trying the change again.
+//!
 //! # Sign-ins
 //!
 //! A sign-in ends after `sign_in.idle_timeout` (7 days) without use, and at the latest
@@ -97,8 +134,12 @@ pub mod compromised;
 pub mod email_link;
 pub mod legal;
 mod limits;
+pub mod mfa;
 pub mod password;
+pub mod pending_sign_in;
+mod reauthenticate;
 mod sign_in;
+mod sign_in_second_factor;
 pub mod sign_in_session;
 mod sign_ins;
 mod sign_up;
@@ -116,8 +157,8 @@ use axum::{
 };
 use sea_orm::DatabaseConnection;
 
-pub use self::signed_in::{Authenticator, SignedIn};
-use self::{limits::Limits, password::Passwords, sign_in_session::Lifetime};
+pub use self::signed_in::{Authenticator, RecentlyAuthenticated, SignedIn};
+use self::{limits::Limits, mfa::cipher::Cipher, password::Passwords, sign_in_session::Lifetime};
 use crate::{
     config::{self, PublicUrl},
     email::Mailer,
@@ -139,6 +180,16 @@ pub const SIGN_INS_PATH: &str = "/api/sign-ins";
 pub const SIGN_INS_ITEM_PATH: &str = "/api/sign-ins/{id}";
 /// The path of sign-out in the API.
 pub const SIGN_OUT_PATH: &str = "/api/sign-out";
+/// The path of the second step of sign-in with MFA in the API.
+pub const SIGN_IN_SECOND_FACTOR_PATH: &str = "/api/sign-in/second-factor";
+/// The path of re-authentication in the API.
+pub const REAUTHENTICATE_PATH: &str = "/api/reauthenticate";
+/// The path of the signed-in user's MFA settings in the API.
+pub const MFA_PATH: &str = "/api/mfa";
+/// The path that starts setting up an authenticator app in the API.
+pub const MFA_SETUP_PATH: &str = "/api/mfa/setup";
+/// The path that confirms an authenticator app, which turns MFA on, in the API.
+pub const MFA_CONFIRM_PATH: &str = "/api/mfa/confirm";
 
 /// The pages of the web client that emails link to (`web/src/app/app.routes.ts`).
 const VERIFY_EMAIL_PAGE: &str = "/verify-email";
@@ -155,6 +206,9 @@ pub struct Accounts {
     config: config::Accounts,
     sign_up: config::SignUp,
     sign_in: config::SignIn,
+    mfa: config::Mfa,
+    /// Encrypts the secrets of authenticator apps (SEC-07).
+    mfa_cipher: Cipher,
     /// How long sign-ins last.
     lifetime: Lifetime,
     limits: Limits,
@@ -162,13 +216,14 @@ pub struct Accounts {
 }
 
 impl Accounts {
-    /// Uses the `accounts`, `sign_up` and `sign_in` sections of `config`.
+    /// Uses the `accounts`, `sign_up`, `sign_in` and `mfa` sections of `config`.
     pub fn new(
         db: DatabaseConnection,
         mailer: Mailer,
         passwords: Passwords,
         public_url: PublicUrl,
         config: &config::Config,
+        mfa_encryption_key: &config::MfaEncryptionKey,
         metrics: Arc<Metrics>,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -179,6 +234,8 @@ impl Accounts {
             config: config.accounts.clone(),
             sign_up: config.sign_up.clone(),
             sign_in: config.sign_in.clone(),
+            mfa: config.mfa.clone(),
+            mfa_cipher: Cipher::new(mfa_encryption_key),
             lifetime: Lifetime::new(&config.sign_in),
             limits: Limits::new(&config.sign_up, &config.sign_in),
             metrics,
@@ -192,6 +249,11 @@ impl Accounts {
             .route(SIGN_UP_PATH, post(sign_up::sign_up))
             .route(VERIFY_EMAIL_PATH, post(verify_email::verify_email))
             .route(SIGN_IN_PATH, post(sign_in::sign_in))
+            .route(
+                SIGN_IN_SECOND_FACTOR_PATH,
+                post(sign_in_second_factor::second_factor),
+            )
+            .route(REAUTHENTICATE_PATH, post(reauthenticate::reauthenticate))
             .route(ACCOUNT_PATH, get(account::account))
             .route(
                 SIGN_INS_PATH,
@@ -199,6 +261,12 @@ impl Accounts {
             )
             .route(SIGN_INS_ITEM_PATH, delete(sign_ins::revoke))
             .route(SIGN_OUT_PATH, post(sign_ins::sign_out))
+            .route(
+                MFA_PATH,
+                get(mfa::settings::status).delete(mfa::settings::disable),
+            )
+            .route(MFA_SETUP_PATH, post(mfa::settings::setup))
+            .route(MFA_CONFIRM_PATH, post(mfa::settings::confirm))
             .with_state(self.clone())
     }
 
@@ -214,6 +282,6 @@ impl Accounts {
 
 impl FromRef<Arc<Accounts>> for Authenticator {
     fn from_ref(accounts: &Arc<Accounts>) -> Self {
-        Authenticator::new(accounts.db.clone(), accounts.lifetime)
+        Authenticator::new(accounts.db.clone(), &accounts.sign_in)
     }
 }

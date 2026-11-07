@@ -166,6 +166,26 @@ session_lifetime = "30d"
 # How long a sign-in lasts without being used (AUTH-09). Last activity is recorded at most once a
 # minute, so a sign-in may end up to a minute early.
 idle_timeout = "7d"
+# How long after the password was last entered, at sign-in or since, sensitive changes need it
+# again, with the second factor if MFA is on (AUTH-10): changing the password, email address or MFA
+# settings, turning on unattended access, and deleting the account.
+reauthenticate_after = "15m"
+
+[mfa]
+# Multi-factor authentication with an authenticator app (AUTH-05, AUTH-06), and its protection
+# against guessing (SEC-08). Wrong codes, recovery codes included, are counted per account, in the
+# database, at sign-in and at re-authentication alike.
+# How many wrong codes for one account within the window block its codes.
+max_failures = 5
+# The time over which wrong codes are counted.
+failure_window = "15m"
+# How long codes for an account stay blocked.
+block_duration = "15m"
+# How long the second step of sign-in waits for a code once the password was right.
+sign_in_step_timeout = "5m"
+# How many 30-second steps a code may be early or late, for clocks that are off. Each step more
+# lets one more code through per guess.
+clock_skew_steps = 1
 
 [log]
 # "json" (one object per line, for log collectors) or "text" (for development).

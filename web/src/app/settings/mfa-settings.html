@@ -1,0 +1,142 @@
+<h3 id="settings-mfa" tabindex="-1" i18n>Two-factor authentication</h3>
+<p class="hint" i18n>
+  Ask for a code from an authenticator app on your phone when you sign in, as well as your password.
+</p>
+
+@if (recoveryCodes(); as codes) {
+  <section class="panel" aria-labelledby="mfa-recovery-title">
+    <h4 id="mfa-recovery-title" tabindex="-1" i18n>Save your recovery codes</h4>
+    <p i18n>
+      If you lose your phone, sign in with one of these codes instead. Each works once. Keep them
+      somewhere safe, such as a password manager: this is the only time they're shown.
+    </p>
+    <ul class="codes" aria-labelledby="mfa-recovery-title">
+      @for (code of codes; track code) {
+        <li>
+          <code>{{ code }}</code>
+        </li>
+      }
+    </ul>
+    <div class="actions">
+      <button type="button" class="button" (click)="copy(codes)" i18n>Copy</button>
+      <button type="button" class="button" (click)="download(codes)" i18n>Download</button>
+      <button type="button" class="button button-primary" (click)="done()" i18n>
+        I've saved them
+      </button>
+    </div>
+  </section>
+} @else if (setup(); as setup) {
+  <section class="panel" aria-labelledby="mfa-setup-title">
+    <h4 id="mfa-setup-title" tabindex="-1" i18n>Set up your authenticator app</h4>
+    <ol class="steps">
+      <li><p i18n>Open an authenticator app on your phone, and add an account.</p></li>
+      <li>
+        <p i18n>Scan this QR code with the app.</p>
+        <svg
+          class="qr"
+          role="img"
+          [attr.aria-label]="qrLabel"
+          [attr.viewBox]="'0 0 ' + setup.qrCode.size + ' ' + setup.qrCode.size"
+          shape-rendering="crispEdges"
+        >
+          <rect
+            class="qr-background"
+            [attr.width]="setup.qrCode.size"
+            [attr.height]="setup.qrCode.size"
+          />
+          <path class="qr-modules" [attr.d]="setup.qrCode.path" />
+        </svg>
+        <p i18n>Or, if you can't scan it, enter this setup key:</p>
+        <p>
+          <code class="key">{{ grouped(setup.secret) }}</code>
+        </p>
+      </li>
+      <li>
+        <form class="confirm" (submit)="confirm($event)" novalidate>
+          <label for="mfa-code" i18n>Enter the 6-digit code that the app shows</label>
+          <input
+            #codeInput
+            id="mfa-code"
+            class="input"
+            type="text"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            spellcheck="false"
+            [value]="code()"
+            (input)="typeCode(codeInput.value)"
+            [attr.aria-invalid]="codeError() ? 'true' : null"
+            [attr.aria-describedby]="codeError() ? 'mfa-code-error' : null"
+          />
+          @if (codeError(); as message) {
+            <p id="mfa-code-error" class="field-error">{{ message }}</p>
+          }
+          <div class="actions">
+            <button type="submit" class="button button-primary" [disabled]="busy() !== null" i18n>
+              Turn on
+            </button>
+            <button
+              type="button"
+              class="button"
+              [disabled]="busy() !== null"
+              (click)="cancelSetup()"
+              i18n
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      </li>
+    </ol>
+  </section>
+} @else if (status(); as status) {
+  @if (status.enabled) {
+    <p class="state">
+      <span class="tag tag-on" i18n="Two-factor authentication is on">On</span>
+      @if (status.enabledAt; as enabledAt) {
+        <span class="meta" aria-hidden="true"> · </span>
+        <span class="meta" i18n
+          >Since
+          {{
+            enabledAt | localeDate: 'date' // i18n(ph="date")
+          }}</span
+        >
+      }
+    </p>
+    <p class="meta" i18n>
+      {status.recoveryCodesLeft, plural,
+        =0 {No recovery codes left.}
+        =1 {1 recovery code left.}
+        other {{{ status.recoveryCodesLeft }} recovery codes left.}
+      }
+    </p>
+    @if (status.recoveryCodesLeft <= 3) {
+      <p class="hint" i18n>
+        To get new recovery codes, turn two-factor authentication off and on again.
+      </p>
+    }
+    <button type="button" class="button" [disabled]="busy() !== null" (click)="disable()" i18n>
+      Turn off
+    </button>
+  } @else {
+    <p class="state">
+      <span class="tag" i18n="Two-factor authentication is off">Off</span>
+    </p>
+    <button
+      type="button"
+      class="button button-primary"
+      [disabled]="busy() !== null"
+      (click)="startSetup()"
+      i18n
+    >
+      Turn on
+    </button>
+  }
+} @else if (!loadError()) {
+  <app-skeleton [rows]="1" />
+}
+@if (loadError(); as error) {
+  <app-error-message [error]="error" />
+}
+@if (error(); as error) {
+  <app-error-message [error]="error" />
+}

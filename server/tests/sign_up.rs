@@ -88,6 +88,7 @@ async fn app(configure: impl FnOnce(&mut config::Config)) -> App {
         Passwords::new(&config.passwords).unwrap(),
         PublicUrl::parse("https://twoviewer.test").unwrap(),
         &config,
+        &common::mfa_key(),
         metrics.clone(),
     );
     App {

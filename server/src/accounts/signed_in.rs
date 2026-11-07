@@ -19,6 +19,15 @@
 //! Every request that a sign-in authenticates counts as activity: it moves the sign-in's
 //! `last_active_at` to now, and its `expires_at` on. To spare the database a write per request,
 //! that happens at most once per [`ACTIVITY_INTERVAL`], so a sign-in may end that much early.
+//!
+//! # Recent authentication (AUTH-10)
+//!
+//! A handler for a sensitive change takes [`RecentlyAuthenticated`] instead of [`SignedIn`]. It
+//! answers `428` with the code `reauthentication_required` when the user last entered their
+//! password, at sign-in or by re-authenticating (`POST /api/reauthenticate`), more than
+//! `sign_in.reauthenticate_after` ago. The body's `secondFactor` says whether re-authenticating
+//! needs a code too, because MFA is on. The web client then asks for the password, re-authenticates
+//! and sends the request again.
 
 use std::time::Duration;
 
@@ -32,11 +41,14 @@ use sea_orm::{
     prelude::{DateTimeUtc, Uuid},
 };
 
+use serde_json::{Map, Value};
+
 use super::{
+    mfa,
     sign_in_session::{self, Lifetime},
     token::{self, TOKEN_LENGTH, Token},
 };
-use crate::api::ApiError;
+use crate::{api::ApiError, config};
 
 /// The cookie that holds the token of the browser's sign-in.
 pub const COOKIE_NAME: &str = "__Host-twoviewer-session";
@@ -49,35 +61,47 @@ pub const NOT_SIGNED_IN: ApiError = ApiError::Unauthorized {
 /// How often a sign-in's activity is recorded at most.
 pub const ACTIVITY_INTERVAL: TimeDelta = TimeDelta::minutes(1);
 
+/// The answer to a request for a sensitive change whose sign-in last authenticated too long ago
+/// (AUTH-10).
+const REAUTHENTICATION_REQUIRED: &str = "reauthentication_required";
+
 /// The `Set-Cookie` header value that gives the browser `token`, for `max_age`.
 pub fn cookie(token: &Token, max_age: Duration) -> HeaderValue {
-    let mut value = set_cookie(token.expose(), max_age.as_secs());
+    token_cookie(COOKIE_NAME, token, max_age)
+}
+
+/// The `Set-Cookie` header value that removes the sign-in cookie from the browser.
+pub fn clear_cookie() -> HeaderValue {
+    set_cookie(COOKIE_NAME, "", 0)
+}
+
+/// The `Set-Cookie` header value that gives the browser `token` in the cookie `name`, for
+/// `max_age`, with the attributes of the sign-in cookie.
+pub(super) fn token_cookie(name: &str, token: &Token, max_age: Duration) -> HeaderValue {
+    let mut value = set_cookie(name, token.expose(), max_age.as_secs());
     // Keeps the token out of `Debug` output.
     value.set_sensitive(true);
     value
 }
 
-/// The `Set-Cookie` header value that removes the sign-in cookie from the browser.
-pub fn clear_cookie() -> HeaderValue {
-    set_cookie("", 0)
-}
-
-fn set_cookie(value: &str, max_age: u64) -> HeaderValue {
+/// The `Set-Cookie` header value that sets the cookie `name` to `value`, for `max_age` seconds.
+pub(super) fn set_cookie(name: &str, value: &str, max_age: u64) -> HeaderValue {
     HeaderValue::try_from(format!(
-        "{COOKIE_NAME}={value}; Path=/; Max-Age={max_age}; Secure; HttpOnly; SameSite=Strict"
+        "{name}={value}; Path=/; Max-Age={max_age}; Secure; HttpOnly; SameSite=Strict"
     ))
     .expect("hexadecimal digits are a valid header")
 }
 
-/// The token in the sign-in cookie of `headers`, if there is one.
-fn token(headers: &HeaderMap) -> Option<&str> {
+/// The token in the cookie `cookie_name` of `headers`, if there is one of the length of tokens.
+pub(super) fn cookie_token<'a>(headers: &'a HeaderMap, cookie_name: &str) -> Option<&'a str> {
     headers
         .get_all(header::COOKIE)
         .iter()
         .filter_map(|value| value.to_str().ok())
         .flat_map(|value| value.split(';'))
         .filter_map(|pair| pair.trim().split_once('='))
-        .find_map(|(name, value)| (name == COOKIE_NAME).then_some(value))
+        .find_map(|(name, value)| (name == cookie_name).then_some(value))
+        .filter(|token| token.len() == TOKEN_LENGTH)
 }
 
 /// The signed-in user making a request, and their sign-in.
@@ -87,18 +111,36 @@ pub struct SignedIn {
     pub session_id: Uuid,
     /// When the sign-in ends unless it is used again.
     pub expires_at: DateTimeUtc,
+    /// When the user last entered their password for this sign-in: when they signed in, or last
+    /// re-authenticated (AUTH-10).
+    pub authenticated_at: DateTimeUtc,
 }
+
+/// A signed-in user who entered their password, and their second factor if MFA is on, within
+/// `sign_in.reauthenticate_after` (AUTH-10). Handlers of sensitive changes take it: changing the
+/// password, email address or MFA settings, turning on unattended access, and deleting the
+/// account.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecentlyAuthenticated(pub SignedIn);
 
 /// Finds the sign-in of a request.
 #[derive(Clone)]
 pub struct Authenticator {
     db: DatabaseConnection,
     lifetime: Lifetime,
+    /// How long an authentication counts as recent (AUTH-10).
+    reauthenticate_after: TimeDelta,
 }
 
 impl Authenticator {
-    pub fn new(db: DatabaseConnection, lifetime: Lifetime) -> Self {
-        Self { db, lifetime }
+    /// Uses the `sign_in` section of the configuration.
+    pub fn new(db: DatabaseConnection, config: &config::SignIn) -> Self {
+        Self {
+            db,
+            lifetime: Lifetime::new(config),
+            reauthenticate_after: TimeDelta::from_std(config.reauthenticate_after)
+                .unwrap_or(TimeDelta::MAX),
+        }
     }
 
     /// The sign-in whose token is in the cookie of `headers`, if it is active: neither expired
@@ -110,7 +152,7 @@ impl Authenticator {
     /// The sign-in whose token is in the cookie of `headers`, if it is active, after recording
     /// its activity.
     pub async fn signed_in(&self, headers: &HeaderMap) -> Result<Option<SignedIn>, DbErr> {
-        let Some(token) = token(headers).filter(|token| token.len() == TOKEN_LENGTH) else {
+        let Some(token) = cookie_token(headers, COOKIE_NAME) else {
             return Ok(None);
         };
         let now = Utc::now();
@@ -143,7 +185,31 @@ impl Authenticator {
             user_id: session.user_id,
             session_id: session.id,
             expires_at,
+            authenticated_at: session.authenticated_at,
         }))
+    }
+
+    /// `signed_in`, if it authenticated recently enough for a sensitive change (AUTH-10).
+    /// Otherwise `428` with the code `reauthentication_required`, and `secondFactor` saying
+    /// whether re-authenticating needs a code.
+    pub async fn recently_authenticated(
+        &self,
+        signed_in: SignedIn,
+    ) -> Result<RecentlyAuthenticated, ApiError> {
+        if Utc::now() - signed_in.authenticated_at <= self.reauthenticate_after {
+            return Ok(RecentlyAuthenticated(signed_in));
+        }
+        let second_factor = mfa::factor::Entity::find_by_id(signed_in.user_id)
+            .filter(mfa::factor::Column::ConfirmedAt.is_not_null())
+            .one(&self.db)
+            .await?
+            .is_some();
+        let mut details = Map::new();
+        details.insert("secondFactor".to_owned(), Value::Bool(second_factor));
+        Err(ApiError::PreconditionRequired {
+            code: REAUTHENTICATION_REQUIRED,
+            details,
+        })
     }
 
     /// When the sign-in `session_id` ends unless it is used again, if it is active. Its activity
@@ -169,6 +235,20 @@ where
         Authenticator::from_ref(state)
             .authenticate(&parts.headers)
             .await
+    }
+}
+
+impl<S> FromRequestParts<S> for RecentlyAuthenticated
+where
+    S: Send + Sync,
+    Authenticator: FromRef<S>,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let authenticator = Authenticator::from_ref(state);
+        let signed_in = authenticator.authenticate(&parts.headers).await?;
+        authenticator.recently_authenticated(signed_in).await
     }
 }
 
@@ -204,22 +284,35 @@ mod tests {
 
     #[test]
     fn the_token_is_found_among_other_cookies() {
+        let token = Token::generate();
+        let token = token.expose();
+        let token_of = |headers: &HeaderMap| cookie_token(headers, COOKIE_NAME).map(str::to_owned);
         let mut headers = HeaderMap::new();
-        assert_eq!(token(&headers), None);
+        assert_eq!(token_of(&headers), None);
 
         headers.append(header::COOKIE, HeaderValue::from_static("theme=dark"));
-        assert_eq!(token(&headers), None);
+        assert_eq!(token_of(&headers), None);
         headers.append(
             header::COOKIE,
-            HeaderValue::from_static("a=1;__Host-twoviewer-session=abc123; b=2"),
+            format!("a=1;__Host-twoviewer-session={token}; b=2")
+                .parse()
+                .unwrap(),
         );
-        assert_eq!(token(&headers), Some("abc123"));
+        assert_eq!(token_of(&headers).as_deref(), Some(token));
 
         let mut other = HeaderMap::new();
         other.insert(
             header::COOKIE,
-            HeaderValue::from_static("twoviewer-session=abc; x__Host-twoviewer-session=def"),
+            format!("twoviewer-session={token}; x__Host-twoviewer-session={token}")
+                .parse()
+                .unwrap(),
         );
-        assert_eq!(token(&other), None);
+        assert_eq!(token_of(&other), None);
+        // Tokens of another length were never issued.
+        other.insert(
+            header::COOKIE,
+            HeaderValue::from_static("__Host-twoviewer-session=abc123"),
+        );
+        assert_eq!(token_of(&other), None);
     }
 }

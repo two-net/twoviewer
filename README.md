@@ -34,6 +34,7 @@ For a faster edit-and-run loop, start only PostgreSQL and Mailpit, and run the s
 ```sh
 docker compose up --detach postgres mailpit
 DATABASE_URL=postgres://twoviewer:twoviewer@localhost:5432/twoviewer \
+MFA_ENCRYPTION_KEY=Bp3rKIUg1DK7vLKDhGbAlHBIYkgzY+AayfT3/QgVTy0= \
 TWOVIEWER_LOG__FORMAT=text \
 TWOVIEWER_TLS__SELF_SIGNED=true \
 TWOVIEWER_HTTP__PUBLIC_PORT=8443 \

@@ -1,0 +1,133 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+h3,
+h4,
+p {
+  margin: 0;
+}
+
+h4 {
+  font-size: 1rem;
+}
+
+.hint,
+.meta {
+  color: var(--color-text-muted);
+}
+
+.state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.tag {
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+}
+
+.tag-on {
+  border-color: var(--color-success);
+  color: var(--color-success);
+  font-weight: 600;
+}
+
+// A step that takes the user's attention, set apart from the rest of the section.
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  align-self: stretch;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+// Numbered steps. The items stay list items, so that they keep their numbers.
+.steps {
+  margin: 0;
+  padding-left: var(--space-6);
+
+  li + li {
+    margin-top: var(--space-4);
+  }
+
+  li > * + * {
+    margin-top: var(--space-2);
+  }
+}
+
+// Dark modules on a light square in both themes, with its quiet zone, and large enough for phone
+// cameras. Never wider than a narrow window (UI-07).
+.qr {
+  width: min(13rem, 100%);
+  height: auto;
+  aspect-ratio: 1;
+  border-radius: var(--radius);
+}
+
+.qr-background {
+  fill: var(--color-qr);
+}
+
+.qr-modules {
+  fill: var(--color-on-qr);
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+// The key is long, and wraps between its groups in narrow windows.
+.key {
+  overflow-wrap: anywhere;
+  font-size: 1.125rem;
+  letter-spacing: 0.05em;
+}
+
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: min(20rem, 100%);
+
+  label {
+    font-weight: 600;
+  }
+}
+
+.field-error {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+// Two columns where there is room, one in narrow windows.
+.codes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+  gap: var(--space-2) var(--space-6);
+  align-self: stretch;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 1.125rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+app-skeleton,
+app-error-message {
+  align-self: stretch;
+}

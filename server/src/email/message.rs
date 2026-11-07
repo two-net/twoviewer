@@ -9,8 +9,8 @@ use lettre::{
 };
 use uuid::Uuid;
 
-/// The name emails come from. It is never translated (UI-01, `brand/README.md`).
-const SENDER_NAME: &str = "TwoViewer";
+/// The name emails come from.
+const SENDER_NAME: &str = crate::PRODUCT_NAME;
 
 /// The logo in the header of every email, as PNG, since email clients don't show SVG.
 /// `cargo xtask icons` makes it from `brand/logo.svg`.

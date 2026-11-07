@@ -15,6 +15,11 @@ use testcontainers_modules::{
 /// The default lock timeout for migrations (`database.migration_lock_timeout`).
 pub const LOCK_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The key that encrypts the secrets of authenticator apps in tests (`MFA_ENCRYPTION_KEY`).
+pub fn mfa_key() -> twoviewer_server::config::MfaEncryptionKey {
+    twoviewer_server::config::MfaEncryptionKey::new([7; 32])
+}
+
 /// A PostgreSQL server for one test, removed when dropped, and the URL of its database.
 pub async fn postgres() -> (ContainerAsync<Postgres>, String) {
     let container = Postgres::default()

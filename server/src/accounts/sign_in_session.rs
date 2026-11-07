@@ -50,6 +50,10 @@ pub struct Model {
     pub last_active_at: DateTimeUtc,
     /// When the sign-in ends unless it is used again ([`Lifetime::expiry`]).
     pub expires_at: DateTimeUtc,
+    /// When the user last entered their password for this sign-in, and their second factor if
+    /// MFA is on: at sign-in, or when they last re-authenticated. Sensitive changes need it to be
+    /// recent (AUTH-10, [`super::signed_in::RecentlyAuthenticated`]).
+    pub authenticated_at: DateTimeUtc,
     /// Where the user signed in from, which they see in their list of sign-ins (AUTH-09).
     pub ip_address: IpNetwork,
     /// Browser and operating system, such as "Firefox on Linux".

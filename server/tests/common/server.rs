@@ -27,7 +27,7 @@ use twoviewer_server::{
     config::{Config, DatabaseUrl, Secrets, SmtpSecurity},
 };
 
-use super::LOCK_TIMEOUT;
+use super::{LOCK_TIMEOUT, mfa_key};
 
 /// A test certificate authority, and a certificate for `localhost` that it signed.
 struct Pki {
@@ -117,6 +117,7 @@ pub async fn start(url: &str, configure: impl FnOnce(&mut Config)) -> Server {
     let secrets = Secrets {
         database_url: DatabaseUrl::new(url),
         smtp_credentials: None,
+        mfa_encryption_key: mfa_key(),
     };
     let (stop, stopped) = oneshot::channel::<()>();
     let task = tokio::spawn(app::run(config, secrets, listener, async {

@@ -162,4 +162,145 @@ describe('SignIn', () => {
     expect(alert()).toContain('Something went wrong.');
     expect(navigated).toEqual([]);
   });
+
+  describe('with MFA on', () => {
+    /** Signs in with the right password, which the server answers with the second step. */
+    async function passwordStep(): Promise<void> {
+      await fillIn();
+      await submit();
+      server
+        .expectOne('/api/sign-in')
+        .flush(
+          { error: 'second_factor_required' },
+          { status: 428, statusText: 'Precondition Required' },
+        );
+      await settle();
+    }
+
+    async function submitCode(code: string): Promise<void> {
+      await type('sign-in-code', code);
+      await submit();
+    }
+
+    function button(label: string): HTMLButtonElement {
+      const found = [...page.querySelectorAll('button')].find(
+        (button) => button.textContent!.trim() === label,
+      );
+      if (!found) {
+        throw new Error(`no button "${label}"`);
+      }
+      return found;
+    }
+
+    it('asks for a code from the app, then goes to the devices', async () => {
+      await passwordStep();
+
+      expect(navigated).toEqual([]);
+      expect(input('sign-in-password')).toBeNull();
+      expect(page.textContent).toContain('Enter the code that your authenticator app shows.');
+      expect(document.activeElement).toBe(input('sign-in-code'));
+      // Phones fill in codes from text messages and apps, with a keypad.
+      expect(input('sign-in-code').getAttribute('autocomplete')).toBe('one-time-code');
+      expect(input('sign-in-code').getAttribute('inputmode')).toBe('numeric');
+
+      await submitCode('123456');
+      const request = server.expectOne('/api/sign-in/second-factor');
+      expect(request.request.method).toBe('POST');
+      expect(request.request.body).toEqual({ code: '123456' });
+      expect(page.querySelector('[role=status]')!.textContent).toContain('Checking the code…');
+      request.flush(null, { status: 204, statusText: 'No Content' });
+      await settle();
+
+      expect(navigated).toEqual(['/devices']);
+    });
+
+    it('asks for the code before sending', async () => {
+      await passwordStep();
+      await submit();
+
+      server.expectNone('/api/sign-in/second-factor');
+      expect(errors()).toEqual(['Enter the code that your authenticator app shows.']);
+    });
+
+    it('says when the code is wrong, and lets the user try again', async () => {
+      await passwordStep();
+      await submitCode('000000');
+
+      server
+        .expectOne('/api/sign-in/second-factor')
+        .flush({ error: 'second_factor_failed' }, { status: 401, statusText: 'Unauthorized' });
+      await settle();
+
+      expect(alert()).toContain("That code isn't right.");
+      expect(input('sign-in-code').value).toBe('');
+      expect(document.activeElement).toBe(input('sign-in-code'));
+      expect(navigated).toEqual([]);
+    });
+
+    it('takes a recovery code instead', async () => {
+      await passwordStep();
+      button('Use a recovery code instead').click();
+      await settle();
+
+      expect(page.querySelector('label[for=sign-in-code]')!.textContent).toContain('Recovery code');
+      expect(input('sign-in-code').getAttribute('inputmode')).toBeNull();
+      expect(input('sign-in-code').getAttribute('autocomplete')).toBe('off');
+      expect(document.activeElement).toBe(input('sign-in-code'));
+
+      await submitCode('7k2m-9xqa-4b0d-ztw1');
+      server
+        .expectOne('/api/sign-in/second-factor')
+        .flush({ error: 'second_factor_failed' }, { status: 401, statusText: 'Unauthorized' });
+      await settle();
+      expect(alert()).toContain("That recovery code isn't right, or has been used.");
+
+      button('Use a code from your app instead').click();
+      await settle();
+      expect(input('sign-in-code').getAttribute('autocomplete')).toBe('one-time-code');
+      expect(alert()).toBe('');
+    });
+
+    it('asks for the password again once the second step has expired', async () => {
+      await passwordStep();
+      await submitCode('123456');
+
+      server
+        .expectOne('/api/sign-in/second-factor')
+        .flush({ error: 'sign_in_step_expired' }, { status: 410, statusText: 'Gone' });
+      await settle();
+
+      expect(alert()).toContain('Signing in took too long.');
+      expect(input('sign-in-email').value).toBe('ann@example.com');
+      expect(input('sign-in-password').value).toBe('');
+      expect(document.activeElement).toBe(input('sign-in-password'));
+    });
+
+    it('says when codes may be tried again after too many wrong ones', async () => {
+      await passwordStep();
+      await submitCode('000000');
+
+      server.expectOne('/api/sign-in/second-factor').flush(
+        { error: 'too_many_requests' },
+        {
+          status: 429,
+          statusText: 'Too Many Requests',
+          headers: new HttpHeaders({ 'Retry-After': '600' }),
+        },
+      );
+      await settle();
+
+      expect(alert()).toContain('There have been too many wrong codes.');
+      expect(alert()).toMatch(/Try again after .+\./);
+    });
+
+    it('starts over with the password', async () => {
+      await passwordStep();
+      button('Start over').click();
+      await settle();
+
+      expect(input('sign-in-code')).toBeNull();
+      expect(input('sign-in-password').value).toBe('');
+      expect(document.activeElement).toBe(input('sign-in-password'));
+    });
+  });
 });

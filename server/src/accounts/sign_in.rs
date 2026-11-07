@@ -1,6 +1,10 @@
 //! `POST /api/sign-in`: signing in with an email address and a password (AUTH-05). Failed attempts
 //! are throttled per address (AUTH-08) and per network (SEC-08), and no answer reveals whether an
 //! address is registered (SEC-14).
+//!
+//! With MFA on, a right password doesn't sign in yet: it starts a [pending
+//! sign-in](super::pending_sign_in), which the second step completes with a code
+//! ([`super::sign_in_second_factor`]).
 
 use std::{sync::Arc, time::Instant};
 
@@ -20,9 +24,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{
-    Accounts, RESET_PASSWORD_PAGE,
+    Accounts, RESET_PASSWORD_PAGE, mfa,
     password::{Password, PasswordHash, Verification},
-    sign_in_session, sign_up, signed_in,
+    pending_sign_in, sign_in_session, sign_up, signed_in,
     token::Token,
     user,
 };
@@ -45,6 +49,9 @@ pub(super) struct Request {
 const FAILED: ApiError = ApiError::Unauthorized {
     code: "sign_in_failed",
 };
+
+/// The code of the answer to a right password when MFA is on: the second step comes next.
+const SECOND_FACTOR_REQUIRED: &str = "second_factor_required";
 
 /// The reason codes of failed sign-ins in the audit trail.
 mod reason {
@@ -69,6 +76,9 @@ mod reason {
 ///
 /// Every attempt records one audit event: `sign_in_succeeded` or `sign_in_failed`. The failure
 /// that starts a block also records `sign_in_blocked`.
+///
+/// With MFA on, a right password answers `428` (`second_factor_required`) instead, with the cookie
+/// of a pending sign-in, and records nothing yet: the second step records the outcome.
 pub(super) async fn sign_in(
     State(accounts): State<Arc<Accounts>>,
     CorrelationId(correlation_id): CorrelationId,
@@ -192,26 +202,24 @@ impl Attempt<'_> {
     async fn failed(&self) -> Result<Response, ApiError> {
         let accounts = self.accounts;
         let txn = accounts.db.begin().await?;
-        let failure =
-            throttle::record_failure(&txn, Scope::SignIn, &self.subject, &accounts.sign_in_rule())
-                .await?;
-        self.record_failure(
+        let block_started = count_wrong_password(
             &txn,
-            Action::SignInFailed,
-            reason::INVALID_CREDENTIALS,
-            json!({}),
+            accounts,
+            &self.subject,
+            Event {
+                actor: Actor::Visitor {
+                    origin: self.origin.clone(),
+                },
+                action: Action::SignInFailed,
+                target: self.user.as_ref().map(|user| Target::User(user.id)),
+                outcome: Outcome::Failure {
+                    reason_code: reason::INVALID_CREDENTIALS,
+                },
+                correlation_id: self.correlation_id,
+                details: json!({}),
+            },
         )
         .await?;
-        let block_started = failure == Failure::BlockStarted;
-        if block_started {
-            self.record_failure(
-                &txn,
-                Action::SignInBlocked,
-                reason::TOO_MANY_FAILURES,
-                json!({ "blocked_seconds": accounts.sign_in.block_duration.as_secs() }),
-            )
-            .await?;
-        }
         txn.commit().await?;
 
         accounts.metrics.sign_ins_failed.inc();
@@ -219,15 +227,7 @@ impl Attempt<'_> {
             .limits
             .sign_in_failed(self.origin.ip_address, Instant::now());
         if block_started && let Some(user) = &self.user {
-            let reset_url = accounts.public_url.join(RESET_PASSWORD_PAGE);
-            accounts.mailer.send(
-                &user.email,
-                &SignInBlocked {
-                    failures: accounts.sign_in.max_failures,
-                    blocked_for: accounts.sign_in.block_duration,
-                    reset_url: &reset_url,
-                },
-            );
+            notify_blocked(accounts, user);
         }
         Err(FAILED)
     }
@@ -254,48 +254,143 @@ impl Attempt<'_> {
             user.update(&txn).await?;
         }
 
-        // #27: with MFA on, the second step (AUTH-05) goes here, before the sign-in exists.
-
-        let token = Token::generate();
-        let now = Utc::now();
-        let session = sign_in_session::ActiveModel {
-            user_id: Set(user_id),
-            token_hash: Set(token.hash()),
-            created_at: Set(now),
-            last_active_at: Set(now),
-            expires_at: Set(accounts.lifetime.expiry(now, now)),
-            ip_address: Set(IpNetwork::from(self.origin.ip_address)),
-            client_description: Set(self.origin.client_description.clone()),
-            revoked_at: Set(None),
-            ..Default::default()
+        // With MFA on, the second step (AUTH-05) comes before the sign-in exists. Only now, once
+        // the password was right, so that the answer reveals nothing to anyone else (SEC-14).
+        if mfa::second_factor::enabled(&txn, user_id).await?.is_some() {
+            let timeout = accounts.mfa.sign_in_step_timeout;
+            let token = pending_sign_in::create(&txn, user_id, timeout).await?;
+            txn.commit().await?;
+            let mut response = ApiError::PreconditionRequired {
+                code: SECOND_FACTOR_REQUIRED,
+                details: Default::default(),
+            }
+            .into_response();
+            response
+                .headers_mut()
+                .append(header::SET_COOKIE, pending_sign_in::cookie(&token, timeout));
+            return Ok(response);
         }
-        .insert(&txn)
-        .await?;
-        audit::record(
-            &txn,
-            Event {
-                actor: Actor::User {
-                    id: user_id,
-                    origin: self.origin,
-                },
-                action: Action::SignInSucceeded,
-                target: Some(Target::User(user_id)),
-                outcome: Outcome::Success,
-                correlation_id: self.correlation_id,
-                details: json!({ "sign_in_session_id": session.id }),
-            },
-        )
-        .await?;
-        // So that the user's open lists of sign-ins show it.
-        sign_in_session::changed(&txn, user_id).await?;
-        txn.commit().await?;
 
-        // Kept as long as the sign-in can last; the server ends it earlier if it isn't used.
-        let max_age = accounts.lifetime.max;
-        Ok((
-            StatusCode::NO_CONTENT,
-            [(header::SET_COOKIE, signed_in::cookie(&token, max_age))],
+        let token = start(
+            &txn,
+            accounts,
+            user_id,
+            self.origin,
+            self.correlation_id,
+            json!({}),
         )
-            .into_response())
+        .await?;
+        txn.commit().await?;
+        Ok(signed_in_response(accounts, &token, false))
     }
+}
+
+/// Counts a wrong password for the email address `subject` (AUTH-08), and records `failure`, its
+/// audit event, in the transaction `db`. Sign-in and re-authentication both count here, so that
+/// guessing a password is throttled wherever it is typed.
+///
+/// When the failure starts a block, it also records `sign_in_blocked` by the same actor, and
+/// returns `true`: once the transaction has committed, [`notify_blocked`] the account's owner.
+pub(super) async fn count_wrong_password<C: ConnectionTrait>(
+    db: &C,
+    accounts: &Accounts,
+    subject: &[u8],
+    failure: Event,
+) -> Result<bool, ApiError> {
+    let counted =
+        throttle::record_failure(db, Scope::SignIn, subject, &accounts.sign_in_rule()).await?;
+    let blocked = Event {
+        action: Action::SignInBlocked,
+        outcome: Outcome::Failure {
+            reason_code: reason::TOO_MANY_FAILURES,
+        },
+        details: json!({ "blocked_seconds": accounts.sign_in.block_duration.as_secs() }),
+        ..failure.clone()
+    };
+    audit::record(db, failure).await?;
+    let block_started = counted == Failure::BlockStarted;
+    if block_started {
+        audit::record(db, blocked).await?;
+    }
+    Ok(block_started)
+}
+
+/// Emails the owner of `user` that sign-in with their address is blocked, with a link to reset
+/// their password.
+pub(super) fn notify_blocked(accounts: &Accounts, user: &user::Model) {
+    let reset_url = accounts.public_url.join(RESET_PASSWORD_PAGE);
+    accounts.mailer.send(
+        &user.email,
+        &SignInBlocked {
+            failures: accounts.sign_in.max_failures,
+            blocked_for: accounts.sign_in.block_duration,
+            reset_url: &reset_url,
+        },
+    );
+}
+
+/// Signs `user_id` in from `origin`: stores a new sign-in, which authenticated now, records
+/// `sign_in_succeeded` with `details` and the sign-in's ID, and returns its token. Call it in the
+/// transaction of the sign-in.
+pub(super) async fn start<C: ConnectionTrait>(
+    db: &C,
+    accounts: &Accounts,
+    user_id: Uuid,
+    origin: Origin,
+    correlation_id: Uuid,
+    mut details: Value,
+) -> Result<Token, ApiError> {
+    let token = Token::generate();
+    let now = Utc::now();
+    let session = sign_in_session::ActiveModel {
+        user_id: Set(user_id),
+        token_hash: Set(token.hash()),
+        created_at: Set(now),
+        last_active_at: Set(now),
+        expires_at: Set(accounts.lifetime.expiry(now, now)),
+        authenticated_at: Set(now),
+        ip_address: Set(IpNetwork::from(origin.ip_address)),
+        client_description: Set(origin.client_description.clone()),
+        revoked_at: Set(None),
+        ..Default::default()
+    }
+    .insert(db)
+    .await?;
+    details["sign_in_session_id"] = json!(session.id);
+    audit::record(
+        db,
+        Event {
+            actor: Actor::User {
+                id: user_id,
+                origin,
+            },
+            action: Action::SignInSucceeded,
+            target: Some(Target::User(user_id)),
+            outcome: Outcome::Success,
+            correlation_id,
+            details,
+        },
+    )
+    .await?;
+    // So that the user's open lists of sign-ins show it.
+    sign_in_session::changed(db, user_id).await?;
+    Ok(token)
+}
+
+/// `204` with the cookie of the sign-in whose token is `token`, and, after the second step, a
+/// cookie that removes the pending sign-in's.
+pub(super) fn signed_in_response(
+    accounts: &Accounts,
+    token: &Token,
+    clear_pending: bool,
+) -> Response {
+    // Kept as long as the sign-in can last; the server ends it earlier if it isn't used.
+    let session = signed_in::cookie(token, accounts.lifetime.max);
+    let mut response = (StatusCode::NO_CONTENT, [(header::SET_COOKIE, session)]).into_response();
+    if clear_pending {
+        response
+            .headers_mut()
+            .append(header::SET_COOKIE, pending_sign_in::clear_cookie());
+    }
+    response
 }

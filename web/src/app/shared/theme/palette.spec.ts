@@ -39,6 +39,7 @@ const PAIRS: readonly (readonly [string, string, number, string])[] = [
   ['focus', 'surface', GRAPHIC, 'the focus indicator on surfaces'],
   ['on-hint', 'hint', TEXT, 'hint labels'],
   ['on-hint', 'hint', ANY_BACKGROUND, 'hint labels and grid lines on any remote screen'],
+  ['on-qr', 'qr', ANY_BACKGROUND, 'the QR code that authenticator apps scan'],
 ];
 
 /** Colors that need no contrast, and why. */

@@ -22,7 +22,7 @@ use tokio::{net::TcpListener, sync::oneshot};
 use tracing::{info, warn};
 
 use crate::{
-    accounts::{Accounts, Authenticator, password::Passwords, sign_in_session::Lifetime},
+    accounts::{Accounts, Authenticator, password::Passwords},
     config::{Config, Secrets},
     db::{self, migrate::MigrationError},
     email::{self, Mailer},
@@ -160,6 +160,7 @@ async fn serve(
         passwords,
         public_url,
         config,
+        &secrets.mfa_encryption_key,
         metrics.clone(),
     );
     let routes = realtime.routes().merge(accounts.routes());
@@ -220,7 +221,7 @@ async fn start(
         "database schema is current"
     );
     let db = db::connect(database_url).await?;
-    let authenticator = Authenticator::new(db.clone(), Lifetime::new(&config.sign_in));
+    let authenticator = Authenticator::new(db.clone(), &config.sign_in);
     let realtime = Realtime::start(
         database_url,
         config.realtime.clone(),

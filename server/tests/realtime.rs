@@ -70,6 +70,7 @@ async fn sign_in(db: &DatabaseConnection, user_id: Uuid, lasts: TimeDelta) -> Si
         created_at: Set(now),
         last_active_at: Set(now),
         expires_at: Set(now + lasts),
+        authenticated_at: Set(now),
         ip_address: Set("203.0.113.7/32".parse().unwrap()),
         client_description: Set("Firefox on Linux".to_owned()),
         revoked_at: Set(None),

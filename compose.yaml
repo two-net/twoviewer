@@ -45,6 +45,9 @@ services:
         condition: service_started
     environment:
       DATABASE_URL: postgres://twoviewer:twoviewer@postgres/twoviewer
+      # Encrypts the secrets of authenticator apps (SEC-07). A key for local development only:
+      # every real deployment generates its own with `openssl rand -base64 32` (SEC-13).
+      MFA_ENCRYPTION_KEY: Bp3rKIUg1DK7vLKDhGbAlHBIYkgzY+AayfT3/QgVTy0=
       TWOVIEWER_LOG__FORMAT: text
       # A certificate for localhost, generated at startup. Browsers warn that they don't trust it.
       TWOVIEWER_TLS__SELF_SIGNED: "true"

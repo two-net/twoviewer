@@ -40,6 +40,10 @@
   // them has at least 3:1 against any color of the remote screen.
   --color-hint: #ffd33d;
   --color-on-hint: #1b1d21;
+  // The QR code that authenticator apps scan (AUTH-06): dark on light in both themes, since many
+  // scanners don't read light codes on dark.
+  --color-qr: #ffffff;
+  --color-on-qr: #000000;
   --color-focus: var(--color-accent);
   --color-backdrop: rgb(0 0 0 / 50%);
   --shadow: 0 0.25rem 1rem light-dark(rgb(0 0 0 / 15%), rgb(0 0 0 / 60%));

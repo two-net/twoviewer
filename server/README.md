@@ -14,6 +14,7 @@ TWOVIEWER_HTTP__PUBLIC_URL=https://twoviewer.example \
 TWOVIEWER_EMAIL__FROM_ADDRESS=no-reply@mail.twoviewer.example \
 TWOVIEWER_EMAIL__SMTP_HOST=smtp.email-service.example \
 SMTP_USERNAME=... SMTP_PASSWORD=... \
+MFA_ENCRYPTION_KEY=... \
 cargo run -p twoviewer-server
 ```
 
@@ -37,6 +38,7 @@ Secrets are never settings and never go in source control (SEC-13). The server r
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection URL, including the password |
 | `SMTP_USERNAME`, `SMTP_PASSWORD` | The user name and password for the SMTP server of the email delivery service ([Email](#email)). Both, or neither for a server without authentication. |
+| `MFA_ENCRYPTION_KEY` | The key that encrypts the secrets of users' authenticator apps ([MFA](#mfa)): 32 random bytes, base64-encoded. Generate it once with `openssl rand -base64 32`, and keep it: without it, authenticator apps stop working, and users can only sign in with a recovery code. |
 
 To encrypt the connection to the database too, add `sslmode=verify-full` to the URL, and `sslrootcert=<file>` if the database certificate isn't signed by a public CA.
 
@@ -163,11 +165,12 @@ People create an account with an email address, a display name and a password, a
 
 ## Sign-in
 
-People sign in with their email address and password (AUTH-05). Failed attempts are throttled per address (AUTH-08) and per network (SEC-08), and no answer reveals whether an address is registered (SEC-14). Sign-ins end after a week unused and a month at most, and users can see and end theirs (AUTH-09). The code is in [`src/accounts/sign_in.rs`](src/accounts/sign_in.rs), [`src/accounts/sign_ins.rs`](src/accounts/sign_ins.rs), [`src/accounts/sign_in_session.rs`](src/accounts/sign_in_session.rs) and [`src/throttle.rs`](src/throttle.rs).
+People sign in with their email address and password, and with MFA on, a code as well (AUTH-05). Failed attempts are throttled per address (AUTH-08) and per network (SEC-08), and no answer reveals whether an address is registered (SEC-14). Sign-ins end after a week unused and a month at most, and users can see and end theirs (AUTH-09). The code is in [`src/accounts/sign_in.rs`](src/accounts/sign_in.rs), [`src/accounts/sign_in_second_factor.rs`](src/accounts/sign_in_second_factor.rs), [`src/accounts/sign_ins.rs`](src/accounts/sign_ins.rs), [`src/accounts/sign_in_session.rs`](src/accounts/sign_in_session.rs) and [`src/throttle.rs`](src/throttle.rs).
 
 | Request | Answers |
 |---|---|
-| `POST /api/sign-in` with `email` and `password` | `204` with the sign-in cookie; `401` (`sign_in_failed`) for a wrong password or an address without an account alike; `422` for empty fields or something that isn't an address; `429` with `Retry-After` while blocked |
+| `POST /api/sign-in` with `email` and `password` | `204` with the sign-in cookie; with MFA on, `428` (`second_factor_required`) with the cookie of a pending sign-in instead; `401` (`sign_in_failed`) for a wrong password or an address without an account alike; `422` for empty fields or something that isn't an address; `429` with `Retry-After` while blocked |
+| `POST /api/sign-in/second-factor` with `code` | `204` with the sign-in cookie, and a cookie that removes the pending sign-in's; `401` (`second_factor_failed`) for a wrong or used code; `410` (`sign_in_step_expired`) without a pending sign-in, which means signing in again; `422` for an empty code; `429` with `Retry-After` while codes are blocked |
 | `GET /api/account` | `200` with the signed-in user's `id`, `email`, `displayName` and `emailVerified`; `401` (`not_signed_in`) without an active sign-in |
 | `GET /api/sign-ins` | `200` with `signIns`, the user's active sign-ins: `id`, `client` (such as "Firefox on Linux"), `ipAddress`, `signedInAt`, `lastActiveAt` and whether it is the `current` one, which comes first, then the most recently used first; `401` |
 | `DELETE /api/sign-ins/{id}` | `204`, and for the current sign-in a cookie that removes it; `410` (`sign_in_ended`) for a sign-in that has ended, or that isn't the user's; `400` for an `id` that isn't one; `401` |
@@ -186,9 +189,46 @@ People sign in with their email address and password (AUTH-05). Failed attempts 
 
 **Networks (SEC-08).** Past `sign_in.max_failures_per_network` (50) failed sign-ins within the window, a network (an IPv4 address or an IPv6 /64) gets `429` until the window has moved on, before any password is hashed. This slows down guessing across many addresses, which the limit per address doesn't catch. Like the sign-up limits, it is counted in memory by each instance, for at most `sign_in.max_tracked_networks` networks, and no IP addresses are stored.
 
-**Audit.** Every attempt records `sign_in_succeeded` or `sign_in_failed`, before the answer (AUD-03), with the IP address and browser. Failures are recorded with a user actor without an ID, since whoever tried isn't known to be the owner, and with the account as the target if the address has one. Their reason is `invalid_credentials`, `blocked` or `network_blocked`. The failure that starts a block also records `sign_in_blocked`, with the reason `too_many_failures`. Every failed attempt, refused ones included, counts in `twoviewer_sign_ins_failed_total`. Signing out records `sign_out`, and revoking records `sign_in_session_revoked`, once per sign-in that ends, with its ID in `sign_in_session_id`. Signing out of a sign-in that had already ended records nothing.
+**Audit.** Every attempt records `sign_in_succeeded` or `sign_in_failed`, before the answer (AUD-03), with the IP address and browser. Failures are recorded with a user actor without an ID, since whoever tried isn't known to be the owner, and with the account as the target if the address has one. Their reason is `invalid_credentials`, `blocked` or `network_blocked`, or at the second step `invalid_second_factor`. The failure that starts a block also records `sign_in_blocked`, with the reason `too_many_failures`, or `too_many_second_factor_failures` for codes. With MFA on, the password step records nothing; the second step records the outcome, and `sign_in_succeeded` says which `second_factor` it took, `authenticator` or `recovery`. Every failed attempt, refused ones included, counts in `twoviewer_sign_ins_failed_total`. Signing out records `sign_out`, and revoking records `sign_in_session_revoked`, once per sign-in that ends, with its ID in `sign_in_session_id`. Signing out of a sign-in that had already ended records nothing.
 
-**Still to come.** The second step for users with MFA (AUTH-05) comes with MFA itself (#27), between the password check and the creation of the sign-in. Suspended accounts can't sign in once suspension exists (OPS-03, #68).
+**The second step (AUTH-05).** With MFA on, a right password doesn't create a sign-in. It stores a pending one in `pending_sign_in` for `mfa.sign_in_step_timeout` (5 minutes), and gives the browser its token in the cookie `__Host-twoviewer-sign-in`, with the same attributes as the sign-in cookie, so page scripts can't read it either (SEC-09). The database stores only the token's SHA-256. The second step takes a code from the authenticator app or an unused recovery code, and only then creates the sign-in. The pending sign-in is deleted when it completes, and expired ones whenever a new one is stored. The answer `428` comes only after a right password, so it reveals nothing to anyone who doesn't know it (SEC-14). Wrong codes are throttled per account ([MFA](#mfa)), and count toward the limit per network and `twoviewer_sign_ins_failed_total` like wrong passwords.
+
+**Still to come.** Suspended accounts can't sign in once suspension exists (OPS-03, #68).
+
+## MFA
+
+Users turn on MFA with an authenticator app, such as Google Authenticator, Microsoft Authenticator, 1Password or Bitwarden, in Settings → Security (AUTH-06). The code is in [`src/accounts/mfa/`](src/accounts/mfa/mod.rs), and the settings are in `[mfa]`.
+
+| Request | Answers |
+|---|---|
+| `GET /api/mfa` | `200` with `enabled`, `enabledAt` if it is, and `recoveryCodesLeft`; `401` |
+| `POST /api/mfa/setup` | `200` with the new `secret` in base32, for typing, its `otpauth://` `uri`, and that URI as a `qrCode` (`size` and SVG `path`); `409` (`mfa_enabled`) while MFA is on; `428` ([Re-authentication](#re-authentication)); `401` |
+| `POST /api/mfa/confirm` with `code` | `200` with 10 `recoveryCodes`, the only time they are shown; `422` for a code that isn't right; `410` (`mfa_setup_expired`) without a setup; `409`; `428`; `401` |
+| `DELETE /api/mfa` | `204`, also when MFA was off; `428`; `401` |
+
+**Turning it on** takes two steps. Setting up stores a new secret, unconfirmed, and replaces a setup that wasn't confirmed. The user scans the QR code, or types the secret, into their app, and confirms with a code from it. That shows the app works, and only then is MFA on. Confirming also issues 10 recovery codes. **Turning it off** deletes the secret and the recovery codes. Turning MFA on and off records `mfa_enabled` and `mfa_disabled`, and tells the user's browsers (`mfa.changed`), so that open settings reload. Both need a recent authentication. To get new recovery codes, users turn MFA off and on again.
+
+**Codes** are those of RFC 6238 with the settings every app supports: HMAC-SHA1, 6 digits and 30-second steps. A code is accepted up to `mfa.clock_skew_steps` (1) steps early or late, for clocks that are off, and once: the step of the last code accepted is stored, and codes of that step or earlier are refused (RFC 6238 §5.2).
+
+**Recovery codes** stand in for the app when the phone is lost, once each. They are 16 characters from Crockford's base32 alphabet, in groups of four, which is 80 random bits, so they are stored only as SHA-256 hashes, like tokens, with the time each was used (SEC-07). Case, spaces and hyphens don't matter when typing them, and `o`, `i` and `l` count as `0`, `1` and `1`. Using one records `recovery_code_used`, with how many are left.
+
+**The secret** is stored encrypted with AES-256-GCM under `MFA_ENCRYPTION_KEY`, with a random nonce, and bound to its user, so that a secret copied to another user's row doesn't decrypt (SEC-07). A copy of the database alone therefore lets nobody make codes. The stored value starts with a version byte, so that a later change of key can tell old secrets from new ones; changing the key isn't supported yet.
+
+**Guessing (SEC-08).** After `mfa.max_failures` (5) wrong codes for one account within `mfa.failure_window` (15 minutes), codes for it are refused with `429` for `mfa.block_duration` (15 minutes), right ones included, without using them up. Recovery codes count the same, and so do codes at the second step of sign-in and at re-authentication. A guess is right with a chance of 3 in a million, so this keeps guessing hopeless. The counts are in the `throttle` table, under the SHA-256 of the user's ID.
+
+**Still to come.** The emails when MFA is turned on or off or a recovery code is used (AUTH-12, #32). Turning off unattended access on every device when MFA is turned off (DEV-09, #43). Operators must use MFA (OPS-01, #68).
+
+## Re-authentication
+
+Sensitive changes need the password, and with MFA on a code as well, to have been entered within `sign_in.reauthenticate_after` (15 minutes) for the sign-in they are made with (AUTH-10): changing the password, email address or MFA settings, turning on unattended access, and deleting the account. Signing in counts, and so does re-authenticating. The code is in [`src/accounts/reauthenticate.rs`](src/accounts/reauthenticate.rs) and [`src/accounts/signed_in.rs`](src/accounts/signed_in.rs).
+
+| Request | Answers |
+|---|---|
+| `POST /api/reauthenticate` with `password`, and `code` with MFA on | `204`; `401` (`reauthentication_failed`) for a wrong password or code alike; `422` for a missing password or code; `429` with `Retry-After` while passwords or codes for the account are blocked; `401` (`not_signed_in`) |
+
+**For new features.** A handler for a sensitive change takes `accounts::RecentlyAuthenticated` instead of `SignedIn`. It answers `428` (`reauthentication_required`) when the last authentication is too old, with `secondFactor` saying whether a code is needed. The web client then asks for the password, and the code, re-authenticates, and sends the request again.
+
+**Guessing.** A wrong password counts toward the same block as failed sign-ins with the user's address (AUTH-08), and a wrong code toward the same block as the second step of sign-in, so a stolen sign-in cookie gives no more guesses at either. A block that re-authentication starts is audited and emailed as at sign-in. Every attempt records `reauthenticated`, with its outcome and the sign-in's ID, and with `second_factor` when a code was needed.
 
 ## Passwords
 

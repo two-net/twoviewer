@@ -14,10 +14,10 @@ use axum::{
     extract::ConnectInfo,
     http::{HeaderMap, Method, Request, StatusCode, header},
 };
-use chrono::Utc;
+use chrono::{TimeDelta, Utc};
 use sea_orm::{
-    ActiveEnum, ActiveModelTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, Set,
-    Statement, prelude::Uuid,
+    ActiveEnum, ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend,
+    EntityTrait, QueryFilter, Set, Statement, prelude::Uuid,
 };
 use serde_json::{Value, json};
 use testcontainers_modules::{postgres::Postgres, testcontainers::ContainerAsync};
@@ -25,6 +25,10 @@ use tower::ServiceExt;
 use twoviewer_server::{
     accounts::{
         Accounts, legal,
+        mfa::{
+            factor,
+            totp::{self, Secret},
+        },
         password::{Password, Passwords},
         sign_in_session, user,
     },
@@ -39,7 +43,7 @@ use twoviewer_server::{
 use crate::common::{
     LOCK_TIMEOUT,
     mailpit::{Mailpit, mailpit, wait_until},
-    postgres,
+    mfa_key, postgres,
 };
 
 pub const PASSWORD: &str = "violet otter harbor 92";
@@ -127,6 +131,7 @@ pub async fn app(configure: impl FnOnce(&mut config::Config)) -> App {
         passwords.clone(),
         PublicUrl::parse("https://twoviewer.test").unwrap(),
         &config,
+        &mfa_key(),
         metrics.clone(),
     );
     App {
@@ -253,6 +258,129 @@ impl App {
             .await
     }
 
+    /// A request with `body` as JSON from Firefox, with `cookie` if there is one.
+    pub async fn send_json(
+        &self,
+        method: Method,
+        uri: &str,
+        cookie: Option<&str>,
+        body: Value,
+    ) -> Answer {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::USER_AGENT, FIREFOX)
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(cookie) = cookie {
+            request = request.header(header::COOKIE, cookie);
+        }
+        self.send(
+            request.body(Body::from(body.to_string())).unwrap(),
+            client(),
+        )
+        .await
+    }
+
+    /// `POST /api/sign-in/second-factor` with `code`, and the pending sign-in's `cookie`.
+    pub async fn second_factor(&self, cookie: Option<&str>, code: &str) -> Answer {
+        self.send_json(
+            Method::POST,
+            "/api/sign-in/second-factor",
+            cookie,
+            json!({ "code": code }),
+        )
+        .await
+    }
+
+    /// `POST /api/reauthenticate` with `password`, and `code` if there is one.
+    pub async fn reauthenticate(&self, cookie: &str, password: &str, code: Option<&str>) -> Answer {
+        let mut body = json!({ "password": password });
+        if let Some(code) = code {
+            body["code"] = json!(code);
+        }
+        self.send_json(Method::POST, "/api/reauthenticate", Some(cookie), body)
+            .await
+    }
+
+    /// `GET /api/mfa`.
+    pub async fn mfa(&self, cookie: &str) -> Answer {
+        self.request(Method::GET, "/api/mfa", Some(cookie), &[])
+            .await
+    }
+
+    /// `POST /api/mfa/setup`.
+    pub async fn mfa_setup(&self, cookie: &str) -> Answer {
+        self.request(Method::POST, "/api/mfa/setup", Some(cookie), &[])
+            .await
+    }
+
+    /// `POST /api/mfa/confirm` with `code`.
+    pub async fn mfa_confirm(&self, cookie: &str, code: &str) -> Answer {
+        self.send_json(
+            Method::POST,
+            "/api/mfa/confirm",
+            Some(cookie),
+            json!({ "code": code }),
+        )
+        .await
+    }
+
+    /// `DELETE /api/mfa`.
+    pub async fn mfa_disable(&self, cookie: &str) -> Answer {
+        self.request(Method::DELETE, "/api/mfa", Some(cookie), &[])
+            .await
+    }
+
+    /// Turns MFA on for the user signed in with `cookie`, which must have authenticated recently,
+    /// and returns the app's secret and the recovery codes.
+    pub async fn enable_mfa(&self, cookie: &str) -> (Secret, Vec<String>) {
+        let setup = self.mfa_setup(cookie).await;
+        assert_eq!(setup.status, StatusCode::OK, "{}", setup.body);
+        let secret = secret_of(&setup);
+        let confirmed = self
+            .mfa_confirm(cookie, &code_at(&secret, totp::step(Utc::now())))
+            .await;
+        assert_eq!(confirmed.status, StatusCode::OK, "{}", confirmed.body);
+        let codes = confirmed.json()["recoveryCodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|code| code.as_str().unwrap().to_owned())
+            .collect();
+        (secret, codes)
+    }
+
+    /// The factor of `user_id`, if there is one.
+    pub async fn factor(&self, user_id: Uuid) -> Option<factor::Model> {
+        factor::Entity::find_by_id(user_id)
+            .one(&self.db)
+            .await
+            .unwrap()
+    }
+
+    /// A code of the app with `secret` of `user_id` that the server would accept now: of the
+    /// earliest step within the clock skew that is later than the last one used.
+    pub async fn next_code(&self, user_id: Uuid, secret: &Secret) -> String {
+        let current = totp::step(Utc::now());
+        let last = self.factor(user_id).await.unwrap().last_used_step;
+        let step = last.map_or(current - 1, |last| (last + 1).max(current - 1));
+        assert!(step <= current + 1, "no unused code within the clock skew");
+        code_at(secret, step)
+    }
+
+    /// Moves when the sign-in `id` last authenticated back by `ago`.
+    pub async fn authenticated_ago(&self, id: Uuid, ago: TimeDelta) {
+        sign_in_session::Entity::update_many()
+            .set(sign_in_session::ActiveModel {
+                authenticated_at: Set(Utc::now() - ago),
+                ..Default::default()
+            })
+            .filter(sign_in_session::Column::Id.eq(id))
+            .exec(&self.db)
+            .await
+            .unwrap();
+    }
+
     /// An account with `email` and [`PASSWORD`], unverified.
     pub async fn create_user(&self, email: &str) -> user::Model {
         create_user(&self.db, &self.passwords, email).await
@@ -323,4 +451,32 @@ pub async fn create_user(
     .insert(db)
     .await
     .unwrap()
+}
+
+/// The code of the app with `secret` for `step`, as typed.
+pub fn code_at(secret: &Secret, step: i64) -> String {
+    format!("{:06}", secret.code_at(step))
+}
+
+/// The secret of the app in the answer to `POST /api/mfa/setup`.
+pub fn secret_of(setup: &Answer) -> Secret {
+    let base32 = setup.json()["secret"].as_str().unwrap().to_owned();
+    Secret::from_bytes(
+        &data_encoding::BASE32_NOPAD
+            .decode(base32.as_bytes())
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+/// A code that the app with `secret` doesn't make around now, so it is wrong.
+pub fn wrong_code(secret: &Secret) -> String {
+    let current = totp::step(Utc::now());
+    let around: Vec<String> = (current - 3..=current + 3)
+        .map(|step| code_at(secret, step))
+        .collect();
+    (0..)
+        .map(|n| format!("{n:06}"))
+        .find(|code| !around.contains(code))
+        .unwrap()
 }

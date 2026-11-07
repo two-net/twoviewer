@@ -68,9 +68,14 @@ impl ActiveModelBehavior for ActiveModel {}
     rename_all = "snake_case"
 )]
 pub enum Scope {
-    /// Sign-in with an email address and password (AUTH-08). The subject is the address, whether
-    /// or not it has an account, so that a block doesn't reveal whether it has one (SEC-14).
+    /// Passwords: at sign-in (AUTH-08), and at re-authentication (AUTH-10). The subject is the
+    /// email address, whether or not it has an account, so that a block doesn't reveal whether it
+    /// has one (SEC-14).
     SignIn,
+    /// Codes from an authenticator app, and recovery codes, at the second step of sign-in and at
+    /// re-authentication (SEC-08). The subject is the user's ID: only someone who knew the
+    /// password gets this far.
+    SecondFactor,
 }
 
 /// How many failures within how long block a subject, and for how long.

@@ -27,6 +27,7 @@ use figment::{
 };
 use lettre::Address;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use crate::accounts::password;
 
@@ -47,6 +48,7 @@ pub struct Config {
     pub accounts: Accounts,
     pub sign_up: SignUp,
     pub sign_in: SignIn,
+    pub mfa: Mfa,
     pub log: Log,
 }
 
@@ -289,6 +291,33 @@ pub struct SignIn {
     /// How long a sign-in lasts without being used (AUTH-09).
     #[serde(with = "humantime_serde")]
     pub idle_timeout: Duration,
+    /// How long after the password was last entered, at sign-in or since, sensitive changes need
+    /// it again, with the second factor if MFA is on (AUTH-10).
+    #[serde(with = "humantime_serde")]
+    pub reauthenticate_after: Duration,
+}
+
+/// Multi-factor authentication with an authenticator app (AUTH-05, AUTH-06), and its protection
+/// against guessing (SEC-08).
+///
+/// Wrong codes are counted per account, in the database like failed sign-ins, both at sign-in and
+/// at re-authentication. Recovery codes count the same.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Mfa {
+    /// How many wrong codes for one account within `failure_window` block its codes.
+    pub max_failures: usize,
+    /// The time over which wrong codes are counted.
+    #[serde(with = "humantime_serde")]
+    pub failure_window: Duration,
+    /// How long codes for an account stay blocked once `max_failures` were wrong.
+    #[serde(with = "humantime_serde")]
+    pub block_duration: Duration,
+    /// How long the second step of sign-in waits for a code once the password was right.
+    #[serde(with = "humantime_serde")]
+    pub sign_in_step_timeout: Duration,
+    /// How many 30-second steps a code may be early or late, for clocks that are off.
+    pub clock_skew_steps: u32,
 }
 
 /// Operational logs (MNT-03), written to standard output.
@@ -427,6 +456,19 @@ impl Default for SignIn {
             max_tracked_networks: 100_000,
             session_lifetime: Duration::from_secs(30 * 24 * 60 * 60),
             idle_timeout: Duration::from_secs(7 * 24 * 60 * 60),
+            reauthenticate_after: Duration::from_secs(15 * 60),
+        }
+    }
+}
+
+impl Default for Mfa {
+    fn default() -> Self {
+        Self {
+            max_failures: 5,
+            failure_window: Duration::from_secs(15 * 60),
+            block_duration: Duration::from_secs(15 * 60),
+            sign_in_step_timeout: Duration::from_secs(5 * 60),
+            clock_skew_steps: 1,
         }
     }
 }
@@ -505,6 +547,11 @@ pub enum ConfigError {
     CredentialsInClear,
     #[error("{0} is not set")]
     MissingSecret(&'static str),
+    #[error("{name} is not valid: it must be {expected}")]
+    InvalidSecret {
+        name: &'static str,
+        expected: &'static str,
+    },
 }
 
 impl Config {
@@ -562,6 +609,13 @@ impl Config {
             ("sign_in.block_duration", self.sign_in.block_duration),
             ("sign_in.session_lifetime", self.sign_in.session_lifetime),
             ("sign_in.idle_timeout", self.sign_in.idle_timeout),
+            (
+                "sign_in.reauthenticate_after",
+                self.sign_in.reauthenticate_after,
+            ),
+            ("mfa.failure_window", self.mfa.failure_window),
+            ("mfa.block_duration", self.mfa.block_duration),
+            ("mfa.sign_in_step_timeout", self.mfa.sign_in_step_timeout),
         ] {
             if value < Duration::from_millis(1) {
                 return Err(ConfigError::TooShort { key });
@@ -602,6 +656,7 @@ impl Config {
                 "sign_in.max_tracked_networks",
                 self.sign_in.max_tracked_networks,
             ),
+            ("mfa.max_failures", self.mfa.max_failures),
         ] {
             if value == 0 {
                 return Err(ConfigError::TooSmall { key });
@@ -706,6 +761,8 @@ pub struct Secrets {
     pub database_url: DatabaseUrl,
     /// For SMTP servers that require authentication, which those of email delivery services do.
     pub smtp_credentials: Option<SmtpCredentials>,
+    /// Encrypts the secrets of users' authenticator apps (SEC-07).
+    pub mfa_encryption_key: MfaEncryptionKey,
 }
 
 impl Secrets {
@@ -713,10 +770,61 @@ impl Secrets {
     pub fn from_env() -> Result<Self, ConfigError> {
         let database_url =
             secret("DATABASE_URL").ok_or(ConfigError::MissingSecret("DATABASE_URL"))?;
+        let mfa_encryption_key = secret(MfaEncryptionKey::VAR)
+            .ok_or(ConfigError::MissingSecret(MfaEncryptionKey::VAR))
+            .and_then(|value| MfaEncryptionKey::from_base64(&value))?;
         Ok(Self {
             database_url: DatabaseUrl::new(database_url),
             smtp_credentials: SmtpCredentials::from_env()?,
+            mfa_encryption_key,
         })
+    }
+}
+
+/// The AES-256 key that encrypts the secrets of authenticator apps at rest (SEC-07), from the
+/// environment variable `MFA_ENCRYPTION_KEY`: 32 random bytes, base64-encoded, such as the output
+/// of `openssl rand -base64 32`.
+///
+/// Losing it makes every user's authenticator app useless, so that they can only sign in with a
+/// recovery code. It never appears in logs (MNT-03): `Debug` hides it, there is no `Display`, and
+/// its memory is cleared when it is dropped.
+#[derive(Clone)]
+pub struct MfaEncryptionKey(Zeroizing<[u8; MfaEncryptionKey::LENGTH]>);
+
+impl MfaEncryptionKey {
+    /// The environment variable that holds the key.
+    pub const VAR: &str = "MFA_ENCRYPTION_KEY";
+    /// The length of the key in bytes.
+    pub const LENGTH: usize = 32;
+
+    pub fn new(bytes: [u8; Self::LENGTH]) -> Self {
+        Self(Zeroizing::new(bytes))
+    }
+
+    /// The key from its base64 encoding, which must be of exactly [`Self::LENGTH`] bytes.
+    pub fn from_base64(encoded: &str) -> Result<Self, ConfigError> {
+        let decoded = data_encoding::BASE64
+            .decode(encoded.trim().as_bytes())
+            .map(Zeroizing::new)
+            .ok();
+        let bytes: [u8; Self::LENGTH] = decoded
+            .and_then(|decoded| decoded.as_slice().try_into().ok())
+            .ok_or(ConfigError::InvalidSecret {
+                name: Self::VAR,
+                expected: "32 bytes, base64-encoded, such as from `openssl rand -base64 32`",
+            })?;
+        Ok(Self::new(bytes))
+    }
+
+    /// The key itself, to encrypt and decrypt with. Never log it.
+    pub fn expose(&self) -> &[u8; Self::LENGTH] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for MfaEncryptionKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("MfaEncryptionKey(..)")
     }
 }
 
@@ -1039,6 +1147,9 @@ mod tests {
         });
     }
 
+    /// 32 bytes, base64-encoded: `0x00`, `0x01`, ..., `0x1f`.
+    const MFA_KEY: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
+
     #[test]
     fn secrets_come_from_the_environment() {
         jail(|jail| {
@@ -1048,13 +1159,48 @@ mod tests {
             ));
 
             jail.set_env("DATABASE_URL", "postgres://app:hunter2@db/app");
+            assert!(matches!(
+                Secrets::from_env(),
+                Err(ConfigError::MissingSecret("MFA_ENCRYPTION_KEY"))
+            ));
+
+            jail.set_env("MFA_ENCRYPTION_KEY", MFA_KEY);
             let secrets = Secrets::from_env().unwrap();
 
             assert_eq!(
                 secrets.database_url.expose(),
                 "postgres://app:hunter2@db/app"
             );
+            let expected: Vec<u8> = (0..32).collect();
+            assert_eq!(&secrets.mfa_encryption_key.expose()[..], &expected[..]);
         });
+    }
+
+    #[test]
+    fn the_mfa_key_must_be_32_bytes_of_base64() {
+        assert!(MfaEncryptionKey::from_base64(MFA_KEY).is_ok());
+        assert!(MfaEncryptionKey::from_base64(&format!(" {MFA_KEY}\n")).is_ok());
+
+        for invalid in [
+            "",
+            "not base64!",
+            // 31 and 33 bytes.
+            "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHg==",
+            "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g",
+        ] {
+            let err = MfaEncryptionKey::from_base64(invalid).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::InvalidSecret {
+                        name: "MFA_ENCRYPTION_KEY",
+                        ..
+                    }
+                ),
+                "{invalid}"
+            );
+            assert!(!err.to_string().contains(invalid) || invalid.is_empty());
+        }
     }
 
     #[test]
@@ -1062,11 +1208,12 @@ mod tests {
         let secrets = Secrets {
             database_url: DatabaseUrl::new("postgres://app:hunter2@db/app"),
             smtp_credentials: Some(SmtpCredentials::new("apikey-7", "hunter3")),
+            mfa_encryption_key: MfaEncryptionKey::from_base64(MFA_KEY).unwrap(),
         };
 
         let formatted = format!("{secrets:?}");
 
-        for secret in ["hunter2", "apikey-7", "hunter3"] {
+        for secret in ["hunter2", "apikey-7", "hunter3", "[0, 1, 2", "AAECAwQF"] {
             assert!(!formatted.contains(secret), "{formatted}");
         }
     }
@@ -1158,6 +1305,49 @@ mod tests {
                     key: "sign_in.block_duration"
                 })
             ));
+        });
+    }
+
+    #[test]
+    fn mfa_limits_and_timeouts_must_be_positive() {
+        jail(|jail| {
+            set_required(jail);
+            jail.set_env("TWOVIEWER_MFA__MAX_FAILURES", "0");
+
+            assert!(matches!(
+                Config::load(),
+                Err(ConfigError::TooSmall {
+                    key: "mfa.max_failures"
+                })
+            ));
+        });
+        for (variable, key) in [
+            (
+                "TWOVIEWER_SIGN_IN__REAUTHENTICATE_AFTER",
+                "sign_in.reauthenticate_after",
+            ),
+            (
+                "TWOVIEWER_MFA__SIGN_IN_STEP_TIMEOUT",
+                "mfa.sign_in_step_timeout",
+            ),
+            ("TWOVIEWER_MFA__BLOCK_DURATION", "mfa.block_duration"),
+        ] {
+            jail(|jail| {
+                set_required(jail);
+                jail.set_env(variable, "0s");
+
+                assert!(
+                    matches!(Config::load(), Err(ConfigError::TooShort { key: k }) if k == key),
+                    "{variable}"
+                );
+            });
+        }
+        // Clocks that are exactly right.
+        jail(|jail| {
+            set_required(jail);
+            jail.set_env("TWOVIEWER_MFA__CLOCK_SKEW_STEPS", "0");
+
+            assert_eq!(Config::load().unwrap().mfa.clock_skew_steps, 0);
         });
     }
 

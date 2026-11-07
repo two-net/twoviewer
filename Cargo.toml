@@ -18,6 +18,8 @@ askama = { version = "0.16.1", default-features = false, features = ["derive", "
 # `json` for the bodies of the API (`server/src/api.rs`).
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "matched-path", "tokio", "ws"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+# Base32 for the secrets of authenticator apps (AUTH-06), and base64 for the key that encrypts them.
+data-encoding = "2.11.1"
 figment = { version = "0.10.19", features = ["env", "toml"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 humantime-serde = "1.1.1"
@@ -25,11 +27,17 @@ humantime-serde = "1.1.1"
 # operating system's certificate store.
 lettre = { version = "0.11.23", default-features = false, features = ["builder", "pool", "ring", "rustls-platform-verifier", "smtp-transport", "tokio1-rustls"] }
 prometheus-client = "0.25.1"
+# Draws the QR code that authenticator apps scan (AUTH-06). Without its default features, which
+# render images, it only encodes, and has no dependencies.
+qrcode = { version = "0.14.1", default-features = false }
 # Randomizes reconnection delays (REL-05), and makes the tokens of email links.
 rand = "0.10.3"
 rcgen = "0.14.10"
 # Renders the logo for `cargo xtask icons`. It has no text, so no fonts or text shaping.
 resvg = { version = "0.49.0", default-features = false }
+# The ring that rustls and sqlx already use, for the HMAC-SHA1 of one-time codes (RFC 6238) and the
+# AES-256-GCM that encrypts their secrets at rest (SEC-07).
+ring = { version = "0.17.14", default-features = false }
 # rustls and tokio-rustls with ring, which sqlx already uses. Their default features would also
 # build aws-lc-rs.
 rustls = { version = "0.23.46", default-features = false, features = ["logging", "ring", "std", "tls12"] }
@@ -39,6 +47,8 @@ sea-orm = { version = "2.0.4", default-features = false, features = ["sqlx-postg
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
+# Compares one-time codes in constant time.
+subtle = { version = "2.6.1", default-features = false }
 sqlx = { version = "0.9.0", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls"] }
 tempfile = "3.27.0"
 testcontainers-modules = { version = "0.15.0", features = ["postgres"] }

@@ -1,0 +1,36 @@
+// The fields, beside the dialog's look in `confirm-dialog.scss`.
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-4);
+
+  label {
+    margin-bottom: 0;
+    font-weight: 600;
+  }
+}
+
+.hint {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.field-error {
+  margin: 0;
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+app-error-message {
+  display: block;
+  margin-top: var(--space-4);
+}
+
+// The status takes the space left of the buttons.
+.status {
+  margin: 0 auto 0 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
