@@ -47,9 +47,10 @@ const CONTENT_SECURITY_POLICY: HeaderValue = HeaderValue::from_static(
      object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
 );
 
-/// The routes of the HTTPS listener. Features add theirs here.
-pub fn router(metrics: Arc<Metrics>, hsts_max_age: Duration) -> Router {
-    secure(instrument(Router::new(), metrics), hsts_max_age)
+/// The HTTPS listener's router: the routes of every feature, in `routes`, with correlation IDs,
+/// request logs, request metrics and the security headers.
+pub fn router(routes: Router, metrics: Arc<Metrics>, hsts_max_age: Duration) -> Router {
+    secure(instrument(routes, metrics), hsts_max_age)
 }
 
 /// Adds correlation IDs, request logs and request metrics to every route of `router`, and to its

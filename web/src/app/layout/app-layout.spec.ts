@@ -2,6 +2,8 @@ import { Component } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
+import { ServerConnection } from '../shared/connection/server-connection';
+import { provideFakeSockets } from '../shared/connection/testing';
 import { AppLayout } from './app-layout';
 
 @Component({ template: '' })
@@ -25,6 +27,7 @@ describe('AppLayout', () => {
             ],
           },
         ]),
+        provideFakeSockets(),
       ],
     });
     harness = await RouterTestingHarness.create('/devices');
@@ -64,6 +67,10 @@ describe('AppLayout', () => {
 
     expect(menuButton.getAttribute('aria-expanded')).toBe('false');
     expect(document.activeElement).toBe(menuButton);
+  });
+
+  it('opens the connection to the server', () => {
+    expect(TestBed.inject(ServerConnection).state()).toBe('connecting');
   });
 
   it('marks the current screen', () => {

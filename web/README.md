@@ -66,8 +66,26 @@ In [`src/app/shared/`](src/app/shared):
 | `describeError(error)`, `<app-error-message [error]>` | Errors: what happened and what the user can do, never server messages or status codes (UI-06). Describe the errors a feature expects yourself, and use these for the rest. |
 | `Toasts.show(message)` | Confirming that a background action has finished (UI-08). A toast disappears after 5 seconds and pauses while hovered or focused. The 5 seconds is a constant, not a server setting (MNT-01), until the web client gets settings from the server. |
 | `localeDate`, `localeNumber` pipes | Dates, times and numbers ([below](#dates-times-and-numbers)). |
+| `ServerConnection` | The real-time connection to the server (IF-09, [below](#real-time-updates)). |
 
 Style with the color tokens in [`src/styles.scss`](src/styles.scss) (`var(--color-text)` and so on), never fixed colors, so that every component works in both themes (THM-06). The colors are provisional until the palettes are designed (#19).
+
+## Real-time updates
+
+`ServerConnection` (in `src/app/shared/connection/`) keeps a WebSocket open to the server, so that screens update without a reload (UI-02). `AppLayout` starts it, so it is open on every signed-in screen. A screen that shows server state:
+
+- fetches it through the API, and again on every `resyncs`, which fires after each connection and whenever events may have been missed;
+- subscribes to `events` and fetches what an event says has changed. Events name what changed, never the new state.
+
+The messages are described in [`protocol/src/lib.rs`](../protocol/src/lib.rs), and copied in `messages.ts`.
+
+After every interruption, it reconnects with randomized, increasing delays (REL-05): between half and all of 1, 2, 4, … seconds, at most 30. It reconnects at once when the browser is back online or the tab is shown again. When the connection has been down for 2 seconds, `<app-connection-banner>` at the top of every page says so, without blocking anything (UI-05); a restart of the server reconnects faster and doesn't show it. These numbers are constants, like the toast duration, until the web client gets settings from the server.
+
+In specs, `provideFakeSockets()` from `shared/connection/testing.ts` replaces the WebSocket with fakes on which the spec plays the server. Specs that render `AppLayout` need it.
+
+### With the development server
+
+`npm start` proxies `/api`, including the WebSocket, to the server on `https://localhost:8443` ([`proxy.conf.json`](proxy.conf.json)), so start the server side first ([`../README.md`](../README.md#running-the-server-side)). The proxy accepts the self-signed certificate, and rewrites the `Origin` of WebSocket handshakes to the server's own, which the server requires. Without the server, the banner shows that the connection is lost.
 
 ## Name and logo
 

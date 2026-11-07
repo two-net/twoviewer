@@ -5,6 +5,7 @@ pub mod db;
 pub mod http;
 pub mod metrics;
 pub mod monitoring;
+pub mod realtime;
 pub mod redirect;
 pub mod telemetry;
 pub mod tls;

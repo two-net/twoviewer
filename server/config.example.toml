@@ -46,6 +46,23 @@ readiness_timeout = "2s"
 # cannot queue live traffic behind it (REL-02).
 migration_lock_timeout = "10s"
 
+[realtime]
+# The real-time connection of browsers and Host Agents (IF-09).
+# How often the server sends a heartbeat on each connection. Clients answer every one.
+heartbeat_interval = "3s"
+# How long a connection may be silent before it counts as lost: the server closes it, and clients
+# reconnect. It must be longer than heartbeat_interval. With the defaults, a Host Agent that
+# disappears without closing its connection is offline within 10 seconds (DEV-07).
+heartbeat_timeout = "8s"
+# The largest message a client may send, in bytes.
+max_message_bytes = 65536
+# How many messages may wait to be sent on one connection. A client that falls this far behind is
+# disconnected, and reconnects.
+send_queue_length = 64
+# How long to wait before retrying when the database connection that receives events from every
+# instance cannot be reestablished.
+listen_retry_interval = "1s"
+
 [log]
 # "json" (one object per line, for log collectors) or "text" (for development).
 format = "json"

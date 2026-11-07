@@ -2,11 +2,14 @@ import { Component, ElementRef, inject, signal, viewChild } from '@angular/core'
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { filter } from 'rxjs';
+import { ServerConnection } from '../shared/connection/server-connection';
 import { SiteHeader } from './site-header';
 
 /**
  * The layout of the signed-in screens, with the main navigation. In narrow windows the
  * navigation opens from a menu button, and closes on navigation or Escape.
+ *
+ * It opens the real-time connection to the server, which stays open from then on.
  */
 @Component({
   selector: 'app-app-layout',
@@ -20,6 +23,7 @@ export class AppLayout {
   private readonly menuButton = viewChild.required<ElementRef<HTMLButtonElement>>('menuButton');
 
   constructor() {
+    inject(ServerConnection).start();
     inject(Router)
       .events.pipe(
         filter((event) => event instanceof NavigationEnd),

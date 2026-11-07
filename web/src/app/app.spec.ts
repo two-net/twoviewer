@@ -6,6 +6,7 @@ import { Router, TitleStrategy, provideRouter } from '@angular/router';
 import { App } from './app';
 import { routes } from './app.routes';
 import { PageTitle } from './layout/page-title';
+import { provideFakeSockets } from './shared/connection/testing';
 
 describe('App', () => {
   beforeEach(() => {
@@ -15,6 +16,7 @@ describe('App', () => {
         provideRouter(routes),
         provideLocationMocks(),
         { provide: TitleStrategy, useClass: PageTitle },
+        provideFakeSockets(),
       ],
     });
   });

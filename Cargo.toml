@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["server", "agent", "xtask"]
+members = ["server", "agent", "protocol", "xtask"]
 # Without xtask, so a plain `cargo build` does not unify its `schema-sync` feature into the server.
-default-members = ["server", "agent"]
+default-members = ["server", "agent", "protocol"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,17 +10,22 @@ edition = "2024"
 
 [workspace.dependencies]
 anyhow = "1.0.104"
-axum = { version = "0.8.9", default-features = false, features = ["http1", "matched-path", "tokio"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "matched-path", "tokio", "ws"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 figment = { version = "0.10.19", features = ["env", "toml"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 humantime-serde = "1.1.1"
 prometheus-client = "0.25.1"
+# Randomizes reconnection delays (REL-05).
+rand = "0.10.3"
 rcgen = "0.14.10"
 # Renders the logo for `cargo xtask icons`. It has no text, so no fonts or text shaping.
 resvg = { version = "0.49.0", default-features = false }
 # rustls and tokio-rustls with ring, which sqlx already uses. Their default features would also
 # build aws-lc-rs.
 rustls = { version = "0.23.46", default-features = false, features = ["logging", "ring", "std", "tls12"] }
+# The operating system's certificate store, for the Host Agent.
+rustls-platform-verifier = "0.7.1"
 sea-orm = { version = "2.0.4", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-chrono", "with-ipnetwork", "with-json", "with-uuid"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
@@ -29,10 +34,14 @@ sqlx = { version = "0.9.0", default-features = false, features = ["postgres", "r
 tempfile = "3.27.0"
 testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
 thiserror = "2.0.21"
-tokio = { version = "1.54.1", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "time"] }
+tokio = { version = "1.54.1", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["logging", "ring", "tls12"] }
+# Without TLS features: TLS comes from tokio-rustls.
+tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["handshake"] }
+tokio-util = { version = "0.7.20", features = ["rt"] }
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+twoviewer-protocol = { path = "protocol" }
 twoviewer-server = { path = "server" }
 uuid = { version = "1.29.0", features = ["v4"] }

@@ -3,88 +3,14 @@
 
 mod common;
 
-use std::{
-    net::SocketAddr,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
-use common::{LOCK_TIMEOUT, execute, postgres};
+use common::{execute, postgres, server::start};
 use sqlx::{Connection, PgConnection};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
-    sync::oneshot,
-    task::JoinHandle,
-};
 use twoviewer_server::{
-    app::{self, RunError},
-    config::{Config, DatabaseUrl, Secrets},
+    app::RunError,
     db::migrate::{LOCK_KEY, MigrationError},
 };
-
-/// A server started with [`start`].
-struct Server {
-    monitoring: SocketAddr,
-    stop: oneshot::Sender<()>,
-    task: JoinHandle<Result<(), RunError>>,
-}
-
-/// Starts the server against `url` on free local ports.
-async fn start(url: &str) -> Server {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let monitoring = listener.local_addr().unwrap();
-    let mut config = Config::default();
-    config.http.listen = "127.0.0.1:0".parse().unwrap();
-    config.http.redirect_listen = "127.0.0.1:0".parse().unwrap();
-    config.tls.self_signed = true;
-    config.monitoring.readiness_timeout = Duration::from_millis(500);
-    config.database.migration_lock_timeout = LOCK_TIMEOUT;
-    let secrets = Secrets {
-        database_url: DatabaseUrl::new(url),
-    };
-    let (stop, stopped) = oneshot::channel::<()>();
-    let task = tokio::spawn(app::run(config, secrets, listener, async {
-        let _ = stopped.await;
-    }));
-    Server {
-        monitoring,
-        stop,
-        task,
-    }
-}
-
-impl Server {
-    /// The status and body of `GET path` on the monitoring listener.
-    async fn get(&self, path: &str) -> (u16, String) {
-        let mut stream = TcpStream::connect(self.monitoring).await.unwrap();
-        let request =
-            format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-        stream.write_all(request.as_bytes()).await.unwrap();
-        let mut response = String::new();
-        stream.read_to_string(&mut response).await.unwrap();
-        let (head, body) = response.split_once("\r\n\r\n").unwrap();
-        let status = head.split(' ').nth(1).unwrap().parse().unwrap();
-        (status, body.to_owned())
-    }
-
-    /// Waits until `GET path` answers `status`, for at most 30 seconds.
-    async fn wait_for(&self, path: &str, status: u16) {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while self.get(path).await.0 != status {
-            assert!(Instant::now() < deadline, "{path} never answered {status}");
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
-
-    /// Requests shutdown and returns the result of the run.
-    async fn shut_down(self) -> Result<(), RunError> {
-        let _ = self.stop.send(());
-        tokio::time::timeout(Duration::from_secs(10), self.task)
-            .await
-            .expect("the server stops promptly")
-            .unwrap()
-    }
-}
 
 /// Waits until a session waits for an advisory lock.
 async fn wait_for_lock_waiter(conn: &mut PgConnection) {
@@ -118,7 +44,7 @@ async fn ready_only_once_migrations_have_completed() {
         .await
         .unwrap();
 
-    let server = start(&url).await;
+    let server = start(&url, |_| {}).await;
     wait_for_lock_waiter(&mut other).await;
 
     // Alive while waiting for migrations, but not ready (DB-05).
@@ -149,7 +75,7 @@ async fn ready_only_once_migrations_have_completed() {
 #[tokio::test]
 async fn not_ready_while_the_database_is_unreachable() {
     let (postgres, url) = postgres().await;
-    let server = start(&url).await;
+    let server = start(&url, |_| {}).await;
     server.wait_for("/readyz", 200).await;
 
     postgres.stop_with_timeout(Some(0)).await.unwrap();
@@ -165,7 +91,7 @@ async fn failed_migrations_stop_the_server() {
     // Not created by migrations, so the server refuses to migrate it.
     execute(&url, "CREATE TABLE stray (id integer)").await;
 
-    let server = start(&url).await;
+    let server = start(&url, |_| {}).await;
 
     let result = tokio::time::timeout(Duration::from_secs(30), server.task)
         .await
@@ -189,7 +115,7 @@ async fn shutdown_while_waiting_for_migrations_stops_promptly() {
         .execute(&mut other)
         .await
         .unwrap();
-    let server = start(&url).await;
+    let server = start(&url, |_| {}).await;
     wait_for_lock_waiter(&mut other).await;
 
     server.shut_down().await.unwrap();

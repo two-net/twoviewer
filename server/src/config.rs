@@ -8,7 +8,7 @@
 //! 3. environment variables `TWOVIEWER_<SECTION>__<SETTING>`, such as
 //!    `TWOVIEWER_DATABASE__MIGRATION_LOCK_TIMEOUT=30s`.
 //!
-//! `server/twoviewer.example.toml` lists every setting with its default. Unknown settings are
+//! `server/config.example.toml` lists every setting with its default. Unknown settings are
 //! rejected, so a typo fails startup instead of being ignored. A new number goes into the section
 //! of the feature that uses it, with a doc comment, and into the example file.
 //!
@@ -34,6 +34,7 @@ pub struct Config {
     pub tls: Tls,
     pub monitoring: Monitoring,
     pub database: Database,
+    pub realtime: Realtime,
     pub log: Log,
 }
 
@@ -103,6 +104,30 @@ pub struct Database {
     pub migration_lock_timeout: Duration,
 }
 
+/// The real-time connection of browsers and Host Agents (IF-09).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Realtime {
+    /// How often the server sends a heartbeat on each connection. Clients answer every one.
+    #[serde(with = "humantime_serde")]
+    pub heartbeat_interval: Duration,
+    /// How long a connection may be silent before it counts as lost: the server closes it, and
+    /// clients, which are told this value, reconnect. It must be longer than the interval. With
+    /// the defaults, a Host Agent that disappears without closing its connection is offline
+    /// within 10 seconds (DEV-07).
+    #[serde(with = "humantime_serde")]
+    pub heartbeat_timeout: Duration,
+    /// The largest message a client may send, in bytes.
+    pub max_message_bytes: usize,
+    /// How many messages may wait to be sent on one connection. A client that falls this far
+    /// behind is disconnected, and reconnects.
+    pub send_queue_length: usize,
+    /// How long to wait before retrying when the database connection that receives events from
+    /// every instance cannot be reestablished.
+    #[serde(with = "humantime_serde")]
+    pub listen_retry_interval: Duration,
+}
+
 /// Operational logs (MNT-03), written to standard output.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -163,6 +188,18 @@ impl Default for Database {
     }
 }
 
+impl Default for Realtime {
+    fn default() -> Self {
+        Self {
+            heartbeat_interval: Duration::from_secs(3),
+            heartbeat_timeout: Duration::from_secs(8),
+            max_message_bytes: 64 * 1024,
+            send_queue_length: 64,
+            listen_retry_interval: Duration::from_secs(1),
+        }
+    }
+}
+
 impl Default for Log {
     fn default() -> Self {
         Self {
@@ -178,6 +215,13 @@ pub enum ConfigError {
     Invalid(#[from] Box<figment::Error>),
     #[error("invalid configuration: {key} must be at least 1ms")]
     TooShort { key: &'static str },
+    #[error("invalid configuration: {key} must be at least 1")]
+    TooSmall { key: &'static str },
+    #[error(
+        "invalid configuration: realtime.heartbeat_timeout must be longer than \
+         realtime.heartbeat_interval"
+    )]
+    HeartbeatTimeout,
     #[error(
         "invalid configuration: set either tls.certificate_file and tls.private_key_file, or \
          tls.self_signed for development"
@@ -218,10 +262,35 @@ impl Config {
                 "database.migration_lock_timeout",
                 self.database.migration_lock_timeout,
             ),
+            (
+                "realtime.heartbeat_interval",
+                self.realtime.heartbeat_interval,
+            ),
+            (
+                "realtime.listen_retry_interval",
+                self.realtime.listen_retry_interval,
+            ),
         ] {
             if value < Duration::from_millis(1) {
                 return Err(ConfigError::TooShort { key });
             }
+        }
+        for (key, value) in [
+            (
+                "realtime.max_message_bytes",
+                self.realtime.max_message_bytes,
+            ),
+            (
+                "realtime.send_queue_length",
+                self.realtime.send_queue_length,
+            ),
+        ] {
+            if value == 0 {
+                return Err(ConfigError::TooSmall { key });
+            }
+        }
+        if self.realtime.heartbeat_timeout <= self.realtime.heartbeat_interval {
+            return Err(ConfigError::HeartbeatTimeout);
         }
         let tls = &self.tls;
         match (
@@ -282,7 +351,7 @@ mod tests {
 
     use super::*;
 
-    const EXAMPLE: &str = include_str!("../twoviewer.example.toml");
+    const EXAMPLE: &str = include_str!("../config.example.toml");
 
     /// Runs `test` with a clean environment, in a temporary working directory.
     #[expect(
@@ -368,7 +437,7 @@ mod tests {
     fn environment_overrides_file_overrides_defaults() {
         jail(|jail| {
             jail.create_file(
-                "twoviewer.toml",
+                "config.toml",
                 r#"
                     [http]
                     listen = "127.0.0.1:8181"
@@ -377,7 +446,7 @@ mod tests {
                 "#,
             )
             .unwrap();
-            jail.set_env(FILE_VAR, "twoviewer.toml");
+            jail.set_env(FILE_VAR, "config.toml");
             jail.set_env("TWOVIEWER_DATABASE__MIGRATION_LOCK_TIMEOUT", "250ms");
             jail.set_env("TWOVIEWER_LOG__FORMAT", "text");
             jail.set_env("TWOVIEWER_TLS__SELF_SIGNED", "true");
@@ -412,11 +481,11 @@ mod tests {
     fn secrets_cannot_be_set_in_the_file() {
         jail(|jail| {
             jail.create_file(
-                "twoviewer.toml",
+                "config.toml",
                 "[database]\nurl = \"postgres://app:hunter2@db/app\"",
             )
             .unwrap();
-            jail.set_env(FILE_VAR, "twoviewer.toml");
+            jail.set_env(FILE_VAR, "config.toml");
 
             let err = Config::load().unwrap_err().to_string();
 
@@ -457,6 +526,31 @@ mod tests {
                 Config::load(),
                 Err(ConfigError::TooShort {
                     key: "database.migration_lock_timeout"
+                })
+            ));
+        });
+    }
+
+    #[test]
+    fn heartbeat_timeout_must_exceed_the_interval() {
+        jail(|jail| {
+            jail.set_env("TWOVIEWER_TLS__SELF_SIGNED", "true");
+            jail.set_env("TWOVIEWER_REALTIME__HEARTBEAT_INTERVAL", "8s");
+
+            assert!(matches!(Config::load(), Err(ConfigError::HeartbeatTimeout)));
+        });
+    }
+
+    #[test]
+    fn realtime_counts_must_be_positive() {
+        jail(|jail| {
+            jail.set_env("TWOVIEWER_TLS__SELF_SIGNED", "true");
+            jail.set_env("TWOVIEWER_REALTIME__SEND_QUEUE_LENGTH", "0");
+
+            assert!(matches!(
+                Config::load(),
+                Err(ConfigError::TooSmall {
+                    key: "realtime.send_queue_length"
                 })
             ));
         });

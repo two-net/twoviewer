@@ -6,6 +6,7 @@ Remote access and remote support, used through the browser. The requirements are
 |---|---|
 | [`server/`](server/README.md) | The server application (Rust) |
 | `agent/` | The Host Agent (Rust) |
+| [`protocol/`](protocol/src/lib.rs) | The messages between the server and its clients (Rust) |
 | [`brand/`](brand/README.md) | The product name and logo, and the rules for using them |
 | [`web/`](web/README.md) | The web client (Angular) |
 | `xtask/` | Development tasks, run as `cargo xtask <command>` |
@@ -34,7 +35,13 @@ TWOVIEWER_HTTP__HSTS_MAX_AGE=0s \
 cargo run -p twoviewer-server
 ```
 
-The web client runs separately with `npm start` in `web/`.
+The web client runs separately with `npm start` in `web/`, on <http://localhost:4200>. It sends `/api` requests and the real-time connection to the server on port 8443 ([`web/README.md`](web/README.md#with-the-development-server)).
+
+The Host Agent connects to the server named by `TWOVIEWER_SERVER` and trusts the certificates that the operating system trusts. So it doesn't trust the self-signed development certificate; use one that your system trusts, for example from [mkcert](https://github.com/FiloSottile/mkcert) (`tls.certificate_file` and `tls.private_key_file`):
+
+```sh
+TWOVIEWER_SERVER=https://localhost:8443 cargo run -p twoviewer-agent
+```
 
 ### Checks
 

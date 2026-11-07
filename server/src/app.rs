@@ -3,12 +3,13 @@
 //! 1. The monitoring listener serves `/livez`, `/readyz` and `/metrics` from the start. Until
 //!    step 3, `/readyz` reports not ready (MNT-02).
 //! 2. The TLS certificate is loaded, pending migrations are applied, then the connection pool
-//!    opens (DB-05). If any of these fails, the server stops without having served traffic
-//!    (DB-06).
+//!    opens (DB-05) and the server starts receiving real-time events. If any of these fails, the
+//!    server stops without having served traffic (DB-06).
 //! 3. The public listeners open: HTTPS (IF-08), and plain HTTP, which only redirects to HTTPS
 //!    (SEC-01). `/readyz` reports ready while the database answers.
 //! 4. On shutdown, `/readyz` reports not ready, so that load balancers stop sending traffic, and
-//!    open requests get `http.shutdown_timeout` to finish.
+//!    real-time connections are closed, so that their clients reconnect elsewhere. Open requests
+//!    and connections get `http.shutdown_timeout` to finish.
 
 use std::{future::Future, io, net::SocketAddr, pin::pin, sync::Arc};
 
@@ -23,6 +24,7 @@ use crate::{
     http,
     metrics::Metrics,
     monitoring::{self, Health},
+    realtime::Realtime,
     redirect,
     tls::{self, Certificate, TlsError, TlsListener},
 };
@@ -33,6 +35,8 @@ pub enum RunError {
     Migration(#[from] MigrationError),
     #[error("cannot connect to the database: {0}")]
     Database(#[from] DbErr),
+    #[error("cannot receive real-time events from the database: {0}")]
+    Realtime(#[source] sqlx::Error),
     #[error("cannot load the TLS certificate: {0}")]
     Tls(#[from] TlsError),
     #[error("cannot listen on {address}: {source}")]
@@ -82,8 +86,8 @@ async fn serve(
     // First, so that a certificate that cannot be used stops the server before it migrates.
     let certificate = Arc::new(Certificate::load(&config.tls).await?);
     let mut shutdown = Box::pin(shutdown);
-    let db = tokio::select! {
-        db = start(config, secrets, metrics) => db?,
+    let (db, realtime) = tokio::select! {
+        started = start(config, secrets, metrics) => started?,
         () = &mut shutdown => {
             // Abandoning the run closes its connection, so PostgreSQL rolls back an unfinished
             // migration and releases the lock (DB-06, DB-07).
@@ -123,30 +127,35 @@ async fn serve(
     let (draining, drain_started) = oneshot::channel();
     let signal = {
         let health = health.clone();
+        let realtime = realtime.clone();
         async move {
             shutdown.await;
             info!("shutting down");
             health.shutting_down();
+            realtime.close_all();
             let _ = draining.send(());
         }
     };
-    let server = pin!(
-        axum::serve(
-            listener,
-            http::router(metrics.clone(), config.http.hsts_max_age)
-        )
-        .with_graceful_shutdown(signal)
-        .into_future()
-    );
+    let server = axum::serve(
+        listener,
+        http::router(realtime.routes(), metrics.clone(), config.http.hsts_max_age),
+    )
+    .with_graceful_shutdown(signal)
+    .into_future();
+    // Only completes after the shutdown signal. axum waits for open requests, but not for
+    // real-time connections, which it hands over once upgraded.
+    let drained = pin!(async {
+        // It never returns an error.
+        let _ = server.await;
+        realtime.wait_closed().await;
+    });
     let timeout = async {
         let _ = drain_started.await;
         tokio::time::sleep(config.http.shutdown_timeout).await;
     };
     tokio::select! {
         biased;
-        // Only completes after the shutdown signal, once open connections are closed. It never
-        // returns an error.
-        _ = server => {}
+        () = drained => {}
         () = timeout => warn!("open connections did not finish within the shutdown timeout"),
     }
 
@@ -162,12 +171,13 @@ async fn bind(address: SocketAddr) -> Result<TcpListener, RunError> {
         .map_err(|source| RunError::Listen { address, source })
 }
 
-/// Applies pending migrations, then opens the connection pool.
+/// Applies pending migrations, then opens the connection pool and starts receiving real-time
+/// events.
 async fn start(
     config: &Config,
     secrets: &Secrets,
-    metrics: &Metrics,
-) -> Result<DatabaseConnection, RunError> {
+    metrics: &Arc<Metrics>,
+) -> Result<(DatabaseConnection, Arc<Realtime>), RunError> {
     let database_url = secrets.database_url.expose();
     let report = db::migrate::migrate(database_url, config.database.migration_lock_timeout).await?;
     metrics.migration_duration.set(report.elapsed.as_secs_f64());
@@ -177,5 +187,9 @@ async fn start(
         version = env!("CARGO_PKG_VERSION"),
         "database schema is current"
     );
-    Ok(db::connect(database_url).await?)
+    let db = db::connect(database_url).await?;
+    let realtime = Realtime::start(database_url, config.realtime.clone(), metrics.clone())
+        .await
+        .map_err(RunError::Realtime)?;
+    Ok((db, realtime))
 }

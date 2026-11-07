@@ -1,0 +1,17 @@
+// A strip at the top of the window that stays in view while the page scrolls. The host is sticky,
+// rather than the region inside it, so that it sticks within the whole page.
+:host {
+  display: block;
+  position: sticky;
+  top: 0;
+  z-index: 15;
+}
+
+.banner {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  text-align: center;
+  overflow-wrap: anywhere;
+}

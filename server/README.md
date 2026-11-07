@@ -20,7 +20,7 @@ For development, `TWOVIEWER_TLS__SELF_SIGNED=true` replaces the two certificate 
 Every limit, timeout and other number is a setting with a default in `src/config.rs` (MNT-01). Later sources override earlier ones:
 
 1. the defaults;
-2. the TOML file named by `TWOVIEWER_CONFIG`, if set. [`twoviewer.example.toml`](twoviewer.example.toml) lists every setting with its default;
+2. the TOML file named by `TWOVIEWER_CONFIG`, if set. [`config.example.toml`](config.example.toml) lists every setting with its default;
 3. environment variables `TWOVIEWER_<SECTION>__<SETTING>`, such as `TWOVIEWER_HTTP__LISTEN=0.0.0.0:443` or `TWOVIEWER_LOG__FORMAT=text`.
 
 Unknown settings fail startup, so typos don't go unnoticed.
@@ -73,6 +73,27 @@ Every response of the HTTPS listener carries these headers, whatever its route o
 
 The headers replace any that a handler sets, so the policy is in one place. HSTS leaves out `preload`, which is hard to undo. `http.hsts_max_age = "0s"` makes browsers forget the policy. Development on `localhost` needs this, because HSTS covers every port of a host.
 
+## Real-time connection
+
+Browsers and Host Agents keep a WebSocket open to the HTTPS listener for presence, session setup and notifications (IF-09). The code is in [`src/realtime/`](src/realtime/mod.rs), and the messages are in the shared crate [`../protocol`](../protocol/src/lib.rs).
+
+| Path | For | Accepted only |
+|---|---|---|
+| `/api/realtime` | browsers | with an `Origin` of this host over HTTPS (`https://` + the `Host` header). Browsers send cookies with WebSocket handshakes and apply no CORS check, so this keeps other websites from connecting in a user's name. |
+| `/api/agent/realtime` | Host Agents | without an `Origin`, which browsers always send, so web pages can't pose as agents. |
+
+Others get `403`. Connections are anonymous until sign-in (#25, #26) and Host Agent credentials (#33, #36) exist; those checks go into the same two handlers.
+
+**Messages.** The server sends `hello` first, then a `heartbeat` every `realtime.heartbeat_interval`, which the client answers. A connection that sends nothing for `realtime.heartbeat_timeout` is closed, and clients reconnect when the server is silent that long. With the defaults (3 s and 8 s), a Host Agent that disappears without closing its connection is offline within 10 seconds (DEV-07). A client that sends anything other than a heartbeat, a message above `realtime.max_message_bytes`, or that falls `realtime.send_queue_length` messages behind is disconnected. Clients reconnect after every close, with randomized, increasing delays (REL-05).
+
+**Events.** A feature calls `realtime::publish(&txn, topic, &event)` in the transaction of its change. The event goes through PostgreSQL `NOTIFY` on channel `twoviewer_realtime`, so it is sent only if the transaction commits, and it reaches the connections on every instance (CAP-03) without another backing service (CON-02). Each instance listens on one database connection of its own, besides the pool. An event names what changed, such as a device ID, never the new state or anything secret: clients fetch the state through the API, which checks that they may see it (AUTH-17). It must stay under 8000 bytes, the notification limit.
+
+**Resync.** Events are not stored. After every `hello`, clients fetch everything they show. When an instance loses its listening connection, events may be lost, so once it is back the instance sends `resync` to all of its clients, which then fetch everything again. While it is down, it retries every `realtime.listen_retry_interval`.
+
+**Shutdown.** Connections are closed with code 1012 (*Service Restart*) as soon as shutdown starts, and clients reconnect to another instance, or to this one once it is back. The server doesn't wait for them as it does for requests.
+
+The connections of Host Agents are counted in `twoviewer_host_agents_online`.
+
 ## Logs
 
 Operational logs go to standard output, one JSON object per line (`log.format = "text"` for development). They are separate from audit events (MNT-03). Each request on the HTTPS listener gets a correlation ID: it is returned in the `x-request-id` header, is on every log line for that request (`span.correlation_id`), and is the `correlation_id` of the audit events the request records.
@@ -85,7 +106,7 @@ Logs never contain secrets or session content. Log route templates such as `/dev
 
 | Metric | Type | Labels | Reported by |
 |---|---|---|---|
-| `twoviewer_host_agents_online` | gauge | | the real-time connection (#17) |
+| `twoviewer_host_agents_online` | gauge | | the real-time connection, per open Host Agent connection |
 | `twoviewer_sessions_active` | gauge | `type` (`control`, `vpn`), `transport` (`direct`, `relayed`) | sessions and VPN (#40, #44, #62) |
 | `twoviewer_relay_bytes_total` | counter | | the relay (#40) |
 | `twoviewer_sign_ins_failed_total` | counter | | sign-in (#25) |
