@@ -4,9 +4,12 @@
 //! - `check-migrations` fails if the migrations and the code model differ (MNT-05).
 //! - `icons` writes the icons made from the logo, `brand/logo.svg` (UI-01).
 //! - `check-icons` fails if those icons are missing or don't match the logo.
+//! - `compromised-passwords <word list>...` writes the list of compromised passwords that new
+//!   passwords are checked against (AUTH-04), `server/data/compromised-passwords.txt`.
 //!
 //! The migration commands work on a throwaway PostgreSQL container, so they need Docker.
 
+mod compromised_passwords;
 mod icons;
 
 use std::{
@@ -33,7 +36,8 @@ const POSTGRES_TAG: &str = "18-alpine";
 const USAGE: &str = "usage: cargo xtask new-migration <snake_case_name>
        cargo xtask check-migrations
        cargo xtask icons
-       cargo xtask check-icons";
+       cargo xtask check-icons
+       cargo xtask compromised-passwords <word list>...";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -43,6 +47,7 @@ async fn main() -> ExitCode {
         ["check-migrations"] => check_migrations().await,
         ["icons"] => icons::write(),
         ["check-icons"] => icons::check(),
+        ["compromised-passwords", ref sources @ ..] => compromised_passwords::write(sources),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::FAILURE;

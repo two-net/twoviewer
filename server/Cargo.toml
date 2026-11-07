@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+argon2.workspace = true
 askama.workspace = true
 axum.workspace = true
 chrono.workspace = true
@@ -27,7 +28,9 @@ tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 twoviewer-protocol.workspace = true
+unicode-normalization.workspace = true
 uuid.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 figment = { workspace = true, features = ["test"] }

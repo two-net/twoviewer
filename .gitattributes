@@ -1,1 +1,2 @@
 server/migrations/*.sql text eol=lf
+server/data/*.txt text eol=lf linguist-generated=true

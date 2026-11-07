@@ -10,6 +10,9 @@ edition = "2024"
 
 [workspace.dependencies]
 anyhow = "1.0.104"
+# Password hashing (SEC-07): Argon2id, with PHC strings and random salts, and its memory cleared
+# after use.
+argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "getrandom", "password-hash", "zeroize"] }
 # Email templates, checked when the server is compiled.
 askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "matched-path", "tokio", "ws"] }
@@ -49,4 +52,14 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 twoviewer-protocol = { path = "protocol" }
 twoviewer-server = { path = "server" }
+# Normalizes passwords (NFKC), so the same characters typed on any system give the same hash.
+unicode-normalization = "0.1.26"
 uuid = { version = "1.29.0", features = ["v4"] }
+zeroize = "1.9.1"
+
+# Argon2 is slow by design, and unoptimized it takes seconds per hash: too slow for local runs and
+# tests.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3

@@ -120,6 +120,30 @@ The server sends transactional emails: email verification, password reset, email
 
 **Logs.** Each attempt is logged with the email's name, such as `test`, its Message-ID, which the email delivery service's logs show too, the attempt number and the SMTP reply code. Recipients, subjects and content are never logged, because they are personal data and contain single-use links (MNT-03). Neither is the SMTP server's reply text, which can repeat the recipient's address.
 
+## Passwords
+
+Sign-up, password change and password reset check new passwords against the same rules, and store only their hashes. The code is in [`src/accounts/password.rs`](src/accounts/password.rs), and the settings are in `[passwords]`.
+
+**Rules.** A new password has at least `passwords.min_length` characters (12, AUTH-03) and at most `passwords.max_length` (1024; AUTH-03 requires accepting at least 128). Any characters count, spaces included, and there are no rules about which kinds a password must contain. Passwords on the list of compromised passwords are rejected, whatever their capitalization (AUTH-04). Signing in checks only that the password is right, so a password set under earlier rules keeps working.
+
+**Normalization.** Passwords are normalized to Unicode NFKC on arrival, so the same characters give the same hash however a device encodes them. Nothing else changes: spaces, case and length are kept as typed. Lengths count Unicode code points, not bytes.
+
+**Hashing.** Passwords are stored only as Argon2id hashes with a random salt each (SEC-07), as PHC strings that record the parameters they were made with. The defaults are OWASP's recommended minimum: `passwords.hash_memory_kib` 19 MiB, `passwords.hash_iterations` 2, and `passwords.hash_parallelism` 1. One hash takes about 20 ms of one CPU core.
+
+- **Memory.** At most `passwords.max_concurrent_hashes` (4) passwords are hashed or checked at once, on the blocking thread pool, and others wait. Hashing therefore takes at most `max_concurrent_hashes × hash_memory_kib` of memory, 76 MiB with the defaults, however many sign-in attempts arrive.
+- **Raising the cost.** New hashes use new settings at once. A user's existing hash is replaced with one made with the new settings at their next sign-in. Keep a sign-in well under the 300 ms of PERF-06: measure with `cargo test --release -p twoviewer-server --lib hashes_are_argon2id -- --nocapture`, which prints how long one hash takes with the default settings.
+- **Unknown accounts.** A sign-in with an address that has no account still computes a hash, so the response takes as long and doesn't reveal whether the address is registered (SEC-14).
+
+Passwords and hashes never appear in logs or audit events (MNT-03, AUD-06).
+
+**The compromised list.** [`data/compromised-passwords.txt`](data/compromised-passwords.txt) is embedded in the server, so the check needs no external service, and passwords never leave the server. It holds the 46,146 passwords of at least 12 characters from SecLists' `xato-net-10-million-passwords-1000000.txt`, the most common passwords from public breaches ([`data/compromised-passwords.LICENSE`](data/compromised-passwords.LICENSE)). Shorter ones aren't listed, since they are rejected anyway; lowering `passwords.min_length` below 12 lets them through. To regenerate the list, or to add more word lists:
+
+```sh
+cargo xtask compromised-passwords xato-net-10-million-passwords-1000000.txt [more word lists...]
+```
+
+It writes the passwords in the form the server looks them up in: normalized, lowercased, sorted and without duplicates. A unit test checks the file.
+
 ## Logs
 
 Operational logs go to standard output, one JSON object per line (`log.format = "text"` for development). They are separate from audit events (MNT-03). Each request on the HTTPS listener gets a correlation ID: it is returned in the `x-request-id` header, is on every log line for that request (`span.correlation_id`), and is the `correlation_id` of the audit events the request records.

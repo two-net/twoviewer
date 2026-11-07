@@ -27,6 +27,8 @@ use figment::{
 use lettre::Address;
 use serde::{Deserialize, Serialize};
 
+use crate::accounts::password;
+
 /// The environment variable that names the configuration file.
 const FILE_VAR: &str = "TWOVIEWER_CONFIG";
 const ENV_PREFIX: &str = "TWOVIEWER_";
@@ -40,6 +42,7 @@ pub struct Config {
     pub database: Database,
     pub realtime: Realtime,
     pub email: Email,
+    pub passwords: Passwords,
     pub log: Log,
 }
 
@@ -178,6 +181,31 @@ pub enum SmtpSecurity {
     None,
 }
 
+/// Passwords: the rules for new ones (AUTH-03) and how they are stored (SEC-07).
+///
+/// Lengths count characters, meaning Unicode code points after normalization, not bytes. Hashes
+/// are Argon2id, which costs `hash_iterations` passes over `hash_memory_kib` of memory each time a
+/// password is set or checked. Raising the cost affects new hashes at once, and the others at their
+/// next sign-in.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Passwords {
+    /// The fewest characters a new password may have.
+    pub min_length: usize,
+    /// The most characters a new password may have. AUTH-03 requires accepting at least 128.
+    pub max_length: usize,
+    /// The memory each hash takes, in KiB.
+    pub hash_memory_kib: u32,
+    /// How many passes each hash makes over its memory.
+    pub hash_iterations: u32,
+    /// How many lanes the memory is divided into. They are computed one after the other, so more
+    /// lanes don't make a hash faster.
+    pub hash_parallelism: u32,
+    /// How many passwords may be hashed or checked at once. Further ones wait, so hashing takes at
+    /// most this many times `hash_memory_kib` of memory, however many requests arrive.
+    pub max_concurrent_hashes: usize,
+}
+
 /// Operational logs (MNT-03), written to standard output.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -266,6 +294,20 @@ impl Default for Email {
     }
 }
 
+impl Default for Passwords {
+    fn default() -> Self {
+        Self {
+            min_length: 12,
+            max_length: 1024,
+            // OWASP's recommended minimum for Argon2id: 19 MiB, 2 passes, 1 lane.
+            hash_memory_kib: 19 * 1024,
+            hash_iterations: 2,
+            hash_parallelism: 1,
+            max_concurrent_hashes: 4,
+        }
+    }
+}
+
 impl Default for Log {
     fn default() -> Self {
         Self {
@@ -300,6 +342,13 @@ pub enum ConfigError {
     EmailServer,
     #[error("invalid configuration: email.from_address is not an email address")]
     FromAddress,
+    #[error("invalid configuration: passwords.max_length must be at least passwords.min_length")]
+    PasswordLengths,
+    #[error(
+        "invalid configuration: passwords.hash_memory_kib, passwords.hash_iterations and \
+         passwords.hash_parallelism are not valid Argon2 parameters: {0}"
+    )]
+    PasswordHashing(argon2::Error),
     #[error(
         "invalid configuration: with email.smtp_security = \"none\", SMTP_USERNAME and \
          SMTP_PASSWORD would be sent unencrypted"
@@ -367,6 +416,11 @@ impl Config {
             ("email.max_attempts", self.email.max_attempts as usize),
             ("email.max_pending", self.email.max_pending),
             ("email.max_connections", self.email.max_connections as usize),
+            ("passwords.min_length", self.passwords.min_length),
+            (
+                "passwords.max_concurrent_hashes",
+                self.passwords.max_concurrent_hashes,
+            ),
         ] {
             if value == 0 {
                 return Err(ConfigError::TooSmall { key });
@@ -385,6 +439,10 @@ impl Config {
             _ => return Err(ConfigError::CertificateSource),
         }
         self.email.server()?;
+        if self.passwords.max_length < self.passwords.min_length {
+            return Err(ConfigError::PasswordLengths);
+        }
+        password::argon2_params(&self.passwords).map_err(ConfigError::PasswordHashing)?;
         Ok(())
     }
 }
@@ -816,6 +874,61 @@ mod tests {
                 Config::load(),
                 Err(ConfigError::TooSmall {
                     key: "email.max_attempts"
+                })
+            ));
+        });
+    }
+
+    #[test]
+    fn password_lengths_must_be_ordered() {
+        jail(|jail| {
+            set_required(jail);
+            jail.set_env("TWOVIEWER_PASSWORDS__MAX_LENGTH", "11");
+            assert!(matches!(Config::load(), Err(ConfigError::PasswordLengths)));
+
+            jail.set_env("TWOVIEWER_PASSWORDS__MAX_LENGTH", "12");
+            assert_eq!(Config::load().unwrap().passwords.max_length, 12);
+
+            jail.set_env("TWOVIEWER_PASSWORDS__MIN_LENGTH", "0");
+            assert!(matches!(
+                Config::load(),
+                Err(ConfigError::TooSmall {
+                    key: "passwords.min_length"
+                })
+            ));
+        });
+    }
+
+    #[test]
+    fn password_hashing_needs_valid_argon2_parameters() {
+        for (setting, value) in [
+            ("HASH_PARALLELISM", "0"),
+            ("HASH_ITERATIONS", "0"),
+            // At least 8 KiB per lane.
+            ("HASH_MEMORY_KIB", "7"),
+        ] {
+            jail(|jail| {
+                set_required(jail);
+                jail.set_env(format!("TWOVIEWER_PASSWORDS__{setting}"), value);
+
+                let err = Config::load().unwrap_err();
+
+                assert!(matches!(err, ConfigError::PasswordHashing(_)), "{setting}");
+                assert!(err.to_string().contains("passwords.hash_"), "{err}");
+            });
+        }
+    }
+
+    #[test]
+    fn password_hashing_needs_a_permit() {
+        jail(|jail| {
+            set_required(jail);
+            jail.set_env("TWOVIEWER_PASSWORDS__MAX_CONCURRENT_HASHES", "0");
+
+            assert!(matches!(
+                Config::load(),
+                Err(ConfigError::TooSmall {
+                    key: "passwords.max_concurrent_hashes"
                 })
             ));
         });

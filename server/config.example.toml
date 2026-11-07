@@ -89,6 +89,25 @@ max_pending = 1000
 # How many connections to the SMTP server may be open at once.
 max_connections = 10
 
+[passwords]
+# The rules for new passwords (AUTH-03) and how passwords are stored (SEC-07). Lengths count
+# characters (Unicode code points), not bytes.
+# The fewest characters a new password may have.
+min_length = 12
+# The most characters a new password may have. AUTH-03 requires accepting at least 128.
+max_length = 1024
+# Passwords are stored as Argon2id hashes. Each hash takes hash_memory_kib of memory and
+# hash_iterations passes over it; the defaults (19 MiB, 2 passes, 1 lane) are OWASP's recommended
+# minimum. Raising them makes each sign-in slower and guessing harder. New hashes use the new
+# values at once, and existing ones are upgraded at their next sign-in.
+hash_memory_kib = 19456
+hash_iterations = 2
+# How many lanes the memory is divided into. They are computed one after the other.
+hash_parallelism = 1
+# How many passwords may be hashed or checked at once. Further ones wait, so hashing takes at most
+# max_concurrent_hashes * hash_memory_kib of memory.
+max_concurrent_hashes = 4
+
 [log]
 # "json" (one object per line, for log collectors) or "text" (for development).
 format = "json"
