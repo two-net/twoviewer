@@ -21,17 +21,27 @@ You need Docker with Buildx, Rust (stable) and Node.js 22. Docker Desktop and Do
 docker compose up --build
 ```
 
-This starts PostgreSQL and the server (MNT-07). The server is on <https://localhost:8443>, with a self-signed certificate that the browser warns about; <http://localhost:8080> redirects there. The monitoring listener is on <http://localhost:9090/readyz>. The database keeps its data between runs; `docker compose down --volumes` deletes it.
+This starts PostgreSQL, the server and Mailpit (MNT-07). The server is on <https://localhost:8443>, with a self-signed certificate that the browser warns about; <http://localhost:8080> redirects there. The monitoring listener is on <http://localhost:9090/readyz>. The database keeps its data between runs; `docker compose down --volumes` deletes it.
 
-For a faster edit-and-run loop, start only PostgreSQL and run the server with cargo, with the same development settings as [`compose.yaml`](compose.yaml):
+Mailpit catches every email the server sends, and shows them on <http://localhost:8025>. To see what emails look like, send the test email:
 
 ```sh
-docker compose up --detach postgres
+docker compose exec server /usr/local/bin/twoviewer-server send-test-email you@example.com
+```
+
+For a faster edit-and-run loop, start only PostgreSQL and Mailpit, and run the server with cargo, with the same development settings as [`compose.yaml`](compose.yaml):
+
+```sh
+docker compose up --detach postgres mailpit
 DATABASE_URL=postgres://twoviewer:twoviewer@localhost:5432/twoviewer \
 TWOVIEWER_LOG__FORMAT=text \
 TWOVIEWER_TLS__SELF_SIGNED=true \
 TWOVIEWER_HTTP__PUBLIC_PORT=8443 \
 TWOVIEWER_HTTP__HSTS_MAX_AGE=0s \
+TWOVIEWER_EMAIL__FROM_ADDRESS=no-reply@twoviewer.test \
+TWOVIEWER_EMAIL__SMTP_HOST=localhost \
+TWOVIEWER_EMAIL__SMTP_PORT=1025 \
+TWOVIEWER_EMAIL__SMTP_SECURITY=none \
 cargo run -p twoviewer-server
 ```
 
@@ -58,9 +68,9 @@ TWOVIEWER_SERVER=https://localhost:8443 cargo run -p twoviewer-agent
 | Web client text is marked for translation ([`web/README.md`](web/README.md#text-and-translation)) | `npm run check:i18n` and `npx ng extract-i18n` in `web/` |
 | Crates with known vulnerabilities ([`deny.toml`](deny.toml)) | `cargo deny check advisories`, after `cargo install --locked cargo-deny` |
 | npm packages with known vulnerabilities | `npm audit` in `web/` |
-| The local start works, and the server image has no fixable vulnerabilities | `docker compose up`, then Trivy on the `twoviewer-server` image |
+| The local start works, the server image sends email, and it has no fixable vulnerabilities | `docker compose up`, `send-test-email`, then Trivy on the `twoviewer-server` image |
 
-The server tests and the `cargo xtask` migration commands start PostgreSQL containers, so they need Docker. With Colima, see [`server/migrations/README.md`](server/migrations/README.md).
+The server tests and the `cargo xtask` migration commands start PostgreSQL and Mailpit containers, so they need Docker. With Colima, see [`server/migrations/README.md`](server/migrations/README.md).
 
 ### Releases
 

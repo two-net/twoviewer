@@ -30,6 +30,11 @@ pub struct Metrics {
     pub http_requests: Family<HttpLabels, Counter>,
     /// How long the migrations at startup took, including waiting for another instance (DB-07).
     pub migration_duration: Gauge<f64, AtomicU64>,
+    /// Emails accepted by the email delivery service.
+    pub emails_sent: Counter,
+    /// Emails given up: rejected by the email delivery service, still failing after every
+    /// attempt, dropped because too many were waiting, or abandoned at shutdown.
+    pub emails_failed: Counter,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
@@ -67,6 +72,8 @@ impl Metrics {
         let sign_ins_failed = Counter::default();
         let http_requests = Family::default();
         let migration_duration = Gauge::default();
+        let emails_sent = Counter::default();
+        let emails_failed = Counter::default();
 
         let mut registry = Registry::with_prefix("twoviewer");
         registry.register(
@@ -101,6 +108,16 @@ impl Metrics {
             Unit::Seconds,
             migration_duration.clone(),
         );
+        registry.register(
+            "emails_sent",
+            "Emails accepted by the email delivery service",
+            emails_sent.clone(),
+        );
+        registry.register(
+            "emails_failed",
+            "Emails given up: rejected, failing after every attempt, dropped or abandoned",
+            emails_failed.clone(),
+        );
         // Every combination reads 0 from the start, so dashboards show no sessions rather than
         // no data.
         for r#type in [SessionType::Control, SessionType::Vpn] {
@@ -117,6 +134,8 @@ impl Metrics {
             sign_ins_failed,
             http_requests,
             migration_duration,
+            emails_sent,
+            emails_failed,
         }
     }
 
@@ -180,6 +199,8 @@ mod tests {
             "twoviewer_relay_bytes_total 0",
             "twoviewer_sign_ins_failed_total 0",
             "twoviewer_migration_duration_seconds 0.0",
+            "twoviewer_emails_sent_total 0",
+            "twoviewer_emails_failed_total 0",
         ] {
             assert!(encoded.lines().any(|l| l == line), "{line}\n{encoded}");
         }

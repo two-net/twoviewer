@@ -1,4 +1,5 @@
-# The complete server side for local development (MNT-07): `docker compose up --build`.
+# The complete server side for local development (MNT-07): `docker compose up --build`. Emails go
+# to Mailpit, on http://localhost:8025.
 # The database keeps its data between runs; `docker compose down --volumes` deletes it.
 
 name: twoviewer
@@ -23,6 +24,15 @@ services:
       timeout: 5s
       retries: 30
 
+  # Catches every email the server sends, instead of an email delivery service, and shows them on
+  # http://localhost:8025.
+  mailpit:
+    image: axllent/mailpit:v1.33.0
+    command: [--disable-version-check]
+    ports:
+      - 127.0.0.1:8025:8025 # the emails sent, in a browser and through Mailpit's API
+      - 127.0.0.1:1025:1025 # SMTP, for a server started with `cargo run`
+
   server:
     build:
       context: .
@@ -31,6 +41,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     environment:
       DATABASE_URL: postgres://twoviewer:twoviewer@postgres/twoviewer
       TWOVIEWER_LOG__FORMAT: text
@@ -41,6 +53,11 @@ services:
       # Browsers would otherwise remember to use only HTTPS for localhost, on every port, which
       # breaks plain-HTTP development servers such as `ng serve`.
       TWOVIEWER_HTTP__HSTS_MAX_AGE: 0s
+      # Emails go to Mailpit, unencrypted. `.test` is a domain reserved for testing.
+      TWOVIEWER_EMAIL__FROM_ADDRESS: no-reply@twoviewer.test
+      TWOVIEWER_EMAIL__SMTP_HOST: mailpit
+      TWOVIEWER_EMAIL__SMTP_PORT: 1025
+      TWOVIEWER_EMAIL__SMTP_SECURITY: none
     ports:
       - 127.0.0.1:8443:8443 # HTTPS: the API and web client
       - 127.0.0.1:8080:8080 # plain HTTP, which redirects to HTTPS

@@ -107,6 +107,13 @@ jobs:
       - run: docker compose up --build --detach --wait
       - name: The server becomes ready
         run: curl --fail --silent --show-error --retry 60 --retry-delay 2 --retry-all-errors http://127.0.0.1:9090/readyz
+      # The image sends email (IF-12), here to Mailpit. The image has no shell, so the binary runs
+      # directly.
+      - name: The test email arrives
+        run: |
+          docker compose exec -T server /usr/local/bin/twoviewer-server send-test-email ci@twoviewer.test
+          curl --fail --silent --show-error http://127.0.0.1:8025/api/v1/messages \
+            | grep -F '"Subject":"Test email from TwoViewer"'
       # The certificate is self-signed, hence --insecure.
       - name: HTTPS with the security headers
         run: |

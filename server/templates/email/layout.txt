@@ -1,0 +1,10 @@
+{#-
+  The layout of every email's plain text, which clients show when they don't show HTML. Each email
+  extends it, and fills the `subject` and `content` blocks. Emails render the `subject` and `body`
+  blocks on their own, with `as_subject()` and `as_body()`, and never the whole template.
+-#}
+{% block subject %}{% endblock %}
+{%- block body %}{% block content %}{% endblock %}
+
+Only allow access to people you know and trust. TwoViewer will never contact you to ask for access.
+{% endblock %}

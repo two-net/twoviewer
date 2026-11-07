@@ -2,14 +2,17 @@
 //!
 //! 1. The monitoring listener serves `/livez`, `/readyz` and `/metrics` from the start. Until
 //!    step 3, `/readyz` reports not ready (MNT-02).
-//! 2. The TLS certificate is loaded, pending migrations are applied, then the connection pool
-//!    opens (DB-05) and the server starts receiving real-time events. If any of these fails, the
-//!    server stops without having served traffic (DB-06).
+//! 2. Email is set up, without connecting to the email delivery service, so that its outages
+//!    never keep the server from starting or from being ready. The TLS certificate is loaded,
+//!    pending migrations are applied, then the connection pool opens (DB-05) and the server starts
+//!    receiving real-time events. If any of these fails, the server stops without having served
+//!    traffic (DB-06).
 //! 3. The public listeners open: HTTPS (IF-08), and plain HTTP, which only redirects to HTTPS
 //!    (SEC-01). `/readyz` reports ready while the database answers.
 //! 4. On shutdown, `/readyz` reports not ready, so that load balancers stop sending traffic, and
 //!    real-time connections are closed, so that their clients reconnect elsewhere. Open requests
-//!    and connections get `http.shutdown_timeout` to finish.
+//!    and connections get `http.shutdown_timeout` to finish, and after them the emails being
+//!    sent. Emails waiting to be tried again are abandoned.
 
 use std::{future::Future, io, net::SocketAddr, pin::pin, sync::Arc};
 
@@ -21,6 +24,7 @@ use tracing::{info, warn};
 use crate::{
     config::{Config, Secrets},
     db::{self, migrate::MigrationError},
+    email::{self, Mailer},
     http,
     metrics::Metrics,
     monitoring::{self, Health},
@@ -39,6 +43,8 @@ pub enum RunError {
     Realtime(#[source] sqlx::Error),
     #[error("cannot load the TLS certificate: {0}")]
     Tls(#[from] TlsError),
+    #[error("cannot set up email: {0}")]
+    Email(#[from] email::SetupError),
     #[error("cannot listen on {address}: {source}")]
     Listen {
         address: SocketAddr,
@@ -83,7 +89,13 @@ async fn serve(
     metrics: &Arc<Metrics>,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), RunError> {
-    // First, so that a certificate that cannot be used stops the server before it migrates.
+    // First, so that settings that cannot be used stop the server before it migrates. Features
+    // send emails through `mailer` (#24).
+    let mailer = Mailer::new(
+        &config.email,
+        secrets.smtp_credentials.as_ref(),
+        metrics.clone(),
+    )?;
     let certificate = Arc::new(Certificate::load(&config.tls).await?);
     let mut shutdown = Box::pin(shutdown);
     let (db, realtime) = tokio::select! {
@@ -148,6 +160,8 @@ async fn serve(
         // It never returns an error.
         let _ = server.await;
         realtime.wait_closed().await;
+        // Only now, since requests send emails until they have finished.
+        mailer.shut_down().await;
     });
     let timeout = async {
         let _ = drain_started.await;

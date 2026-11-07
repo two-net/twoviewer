@@ -1,0 +1,9 @@
+{% extends "email/layout.txt" %}
+{%- block subject %}Test email from TwoViewer{% endblock %}
+{%- block content -%}
+Email delivery works
+
+This test email was sent with `twoviewer-server send-test-email`. If it reached you, TwoViewer can send verification, password-reset and security emails.
+
+To check that it is authenticated, look for spf=pass, dkim=pass and dmarc=pass in its Authentication-Results header.
+{%- endblock %}

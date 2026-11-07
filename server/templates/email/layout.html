@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+{#-
+  The layout of every email's HTML: the name and logo (UI-01) above the content, and a warning
+  below it. Each email extends it, fills the `content` block, and has a `subject` field for the
+  title. Write the content as plain `<h1>` and `<p>`: their colors come from the layout.
+
+  Email clients support little HTML and CSS, so the layout is made of tables with inline styles. It
+  is legible in light and dark mode (THM-11):
+
+  - Every color is set inline, in light mode, on an element with the class from
+    `src/email/palette.rs` that switches it to dark mode, such as `tv-surface`. Clients that support
+    `prefers-color-scheme`, such as Apple Mail, switch these classes to the dark colors. Outlook.com
+    and the Outlook apps mark what they darken with `data-ogsc` (text) and `data-ogsb`
+    (backgrounds), and get the same dark colors.
+  - Clients that darken emails on their own, such as Gmail's apps, invert the light colors. Nothing
+    breaks: there is no text in images and no background image, and the logo has its own blue tile.
+
+  The colors are the web client's, and `palette.rs` checks their contrast.
+-#}
+{%- let bg = crate::email::palette::BG %}
+{%- let surface = crate::email::palette::SURFACE %}
+{%- let fg = crate::email::palette::TEXT %}
+{%- let muted = crate::email::palette::TEXT_MUTED %}
+{%- let border = crate::email::palette::BORDER %}
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+<title>{{ subject }}</title>
+<style>
+:root { color-scheme: light dark; supported-color-schemes: light dark; }
+body { margin: 0; padding: 0; -webkit-text-size-adjust: 100%; }
+h1 { margin: 0 0 16px; font-size: 22px; line-height: 1.3; font-weight: 600; }
+p { margin: 0 0 16px; }
+p:last-child { margin-bottom: 0; }
+@media (prefers-color-scheme: dark) {
+.tv-bg { background-color: {{ bg.dark }} !important; }
+.tv-surface { background-color: {{ surface.dark }} !important; }
+.tv-text { color: {{ fg.dark }} !important; }
+.tv-text-muted { color: {{ muted.dark }} !important; }
+.tv-border { border-color: {{ border.dark }} !important; }
+}
+[data-ogsb] .tv-bg { background-color: {{ bg.dark }} !important; }
+[data-ogsb] .tv-surface { background-color: {{ surface.dark }} !important; }
+[data-ogsc] .tv-text { color: {{ fg.dark }} !important; }
+[data-ogsc] .tv-text-muted { color: {{ muted.dark }} !important; }
+</style>
+</head>
+<body class="tv-bg" style="margin:0;padding:0;background-color:{{ bg.light }};">
+<table role="presentation" class="tv-bg" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:{{ bg.light }};">
+<tr>
+<td align="center" style="padding:24px 16px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;">
+<tr>
+<td style="padding:0 0 16px;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0">
+<tr>
+<td style="padding:0 12px 0 0;vertical-align:middle;"><img src="cid:logo" width="48" height="48" alt="" style="display:block;border:0;"></td>
+<td class="tv-text" style="vertical-align:middle;font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;font-size:20px;font-weight:600;line-height:1.2;color:{{ fg.light }};">TwoViewer</td>
+</tr>
+</table>
+</td>
+</tr>
+<tr>
+<td class="tv-surface tv-text tv-border" style="padding:24px;background-color:{{ surface.light }};border:1px solid {{ border.light }};border-radius:8px;font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;font-size:16px;line-height:1.5;color:{{ fg.light }};">
+{% block content %}{% endblock %}
+</td>
+</tr>
+<tr>
+<td class="tv-text-muted" style="padding:16px 0 0;font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;font-size:13px;line-height:1.5;color:{{ muted.light }};">
+Only allow access to people you know and trust. TwoViewer will never contact you to ask for access.
+</td>
+</tr>
+</table>
+</td>
+</tr>
+</table>
+</body>
+</html>

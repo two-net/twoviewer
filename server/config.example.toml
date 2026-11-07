@@ -5,7 +5,8 @@
 # written like "500ms", "10s", "5m" or "24h".
 #
 # Secrets do not belong here. The database URL comes only from the DATABASE_URL environment
-# variable, and the TLS private key from the file named by tls.private_key_file (SEC-13).
+# variable, the SMTP user name and password only from SMTP_USERNAME and SMTP_PASSWORD, and the TLS
+# private key from the file named by tls.private_key_file (SEC-13).
 
 [http]
 # Address of the HTTPS listener. It opens only once migrations have completed (DB-05).
@@ -62,6 +63,31 @@ send_queue_length = 64
 # How long to wait before retrying when the database connection that receives events from every
 # instance cannot be reestablished.
 listen_retry_interval = "1s"
+
+[email]
+# Transactional emails, such as email verification and password reset (IF-12). They go over SMTP
+# to an external email delivery service, which delivers them from a TwoViewer domain whose sender
+# authentication (SPF, DKIM and DMARC) is set up with that service.
+# The address emails come from, on the TwoViewer domain, and the SMTP server of the email delivery
+# service. There are no defaults.
+# from_address = "no-reply@mail.twoviewer.example"
+# smtp_host = "smtp.email-service.example"
+smtp_port = 587
+# "starttls" (encrypted after connecting, usually port 587), "tls" (encrypted from the start,
+# usually port 465), or "none" (not encrypted: for a local mail catcher in development only).
+smtp_security = "starttls"
+# How long the SMTP server gets to answer each command, and to accept a connection.
+timeout = "30s"
+# How often an email is tried before it is given up, including the first attempt. Only temporary
+# failures are tried again, such as a refused connection or a 4xx reply; a 5xx reply is final.
+max_attempts = 5
+# How long to wait before trying an email again. The wait doubles after each further failure.
+retry_delay = "1m"
+# How many emails may wait to be sent, including those waiting to be tried again. Further emails
+# are dropped until there is room.
+max_pending = 1000
+# How many connections to the SMTP server may be open at once.
+max_connections = 10
 
 [log]
 # "json" (one object per line, for log collectors) or "text" (for development).

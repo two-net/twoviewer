@@ -17,6 +17,9 @@ const ICONS: &[(&str, Icon)] = &[
     ("web/public/favicon.ico", Icon::Ico(&[16, 32, 48])),
     // iOS shows transparent pixels as black, and rounds the corners itself.
     ("web/public/apple-touch-icon.png", Icon::OpaquePng(180)),
+    // Shown at 48 px, so sharp on screens with twice the pixel density. The corners stay
+    // transparent, so the tile is rounded on light and dark backgrounds alike.
+    ("server/templates/email/logo.png", Icon::Png(96)),
 ];
 
 /// How much a color channel of a committed icon may differ from a fresh rendering, out of 255.
@@ -29,6 +32,8 @@ enum Icon {
     Copy,
     /// An ICO file with a PNG image for each size, in pixels.
     Ico(&'static [u32]),
+    /// A PNG image of this size, in pixels.
+    Png(u32),
     /// A PNG image of this size, in pixels, with transparent pixels in the tile's color.
     OpaquePng(u32),
 }
@@ -98,6 +103,7 @@ impl Logo {
         match icon {
             Icon::Copy => bail!("an SVG copy is not rendered"),
             Icon::Ico(sizes) => sizes.iter().map(|&size| self.render_at(size)).collect(),
+            Icon::Png(size) => Ok(vec![self.render_at(*size)?]),
             Icon::OpaquePng(size) => Ok(vec![on_tile_color(&self.render_at(*size)?)?]),
         }
     }
@@ -152,7 +158,7 @@ fn encode(icon: &Icon, images: &[Pixmap]) -> Result<Vec<u8>> {
         .collect::<Result<Vec<_>, _>>()?;
     match icon {
         Icon::Copy => bail!("an SVG copy is not encoded"),
-        Icon::OpaquePng(_) => Ok(pngs.into_iter().next().context("no image")?),
+        Icon::Png(_) | Icon::OpaquePng(_) => Ok(pngs.into_iter().next().context("no image")?),
         Icon::Ico(_) => {
             // ICONDIR, an ICONDIRENTRY per image, then the images.
             let mut ico = Vec::new();
@@ -184,7 +190,7 @@ fn encode(icon: &Icon, images: &[Pixmap]) -> Result<Vec<u8>> {
 fn decode(icon: &Icon, bytes: &[u8]) -> Result<Vec<Pixmap>> {
     match icon {
         Icon::Copy => bail!("an SVG copy is not decoded"),
-        Icon::OpaquePng(_) => Ok(vec![Pixmap::decode_png(bytes)?]),
+        Icon::Png(_) | Icon::OpaquePng(_) => Ok(vec![Pixmap::decode_png(bytes)?]),
         Icon::Ico(_) => {
             let u16_at = |at: usize| -> Result<usize> {
                 let field = bytes.get(at..at + 2).context("truncated ICO file")?;

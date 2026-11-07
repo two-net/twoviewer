@@ -2,6 +2,7 @@ pub mod app;
 pub mod audit;
 pub mod config;
 pub mod db;
+pub mod email;
 pub mod http;
 pub mod metrics;
 pub mod monitoring;

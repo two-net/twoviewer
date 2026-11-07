@@ -24,7 +24,7 @@ use tokio_tungstenite::{
 };
 use twoviewer_server::{
     app::{self, RunError},
-    config::{Config, DatabaseUrl, Secrets},
+    config::{Config, DatabaseUrl, Secrets, SmtpSecurity},
 };
 
 use super::LOCK_TIMEOUT;
@@ -106,10 +106,16 @@ pub async fn start(url: &str, configure: impl FnOnce(&mut Config)) -> Server {
     config.tls.private_key_file = Some(private_key_file);
     config.monitoring.readiness_timeout = Duration::from_millis(500);
     config.database.migration_lock_timeout = LOCK_TIMEOUT;
+    // Nothing listens there, so emails fail rather than reach anyone.
+    config.email.from_address = Some("no-reply@twoviewer.test".to_owned());
+    config.email.smtp_host = Some("localhost".to_owned());
+    config.email.smtp_port = free_address().port();
+    config.email.smtp_security = SmtpSecurity::None;
     configure(&mut config);
     let https = config.http.listen;
     let secrets = Secrets {
         database_url: DatabaseUrl::new(url),
+        smtp_credentials: None,
     };
     let (stop, stopped) = oneshot::channel::<()>();
     let task = tokio::spawn(app::run(config, secrets, listener, async {

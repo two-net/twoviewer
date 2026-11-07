@@ -1,0 +1,6 @@
+{% extends "email/layout.html" %}
+{%- block content -%}
+<h1>Email delivery works</h1>
+<p>This test email was sent with <code>twoviewer-server send-test-email</code>. If it reached you, TwoViewer can send verification, password-reset and security emails.</p>
+<p>To check that it is authenticated, look for <code>spf=pass</code>, <code>dkim=pass</code> and <code>dmarc=pass</code> in its <code>Authentication-Results</code> header.</p>
+{%- endblock %}

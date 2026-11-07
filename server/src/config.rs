@@ -14,6 +14,9 @@
 //!
 //! Secrets are not settings. They come only from the environment at runtime ([`Secrets`]), never
 //! from the file, which may well be kept in source control.
+//!
+//! A few settings have no default, such as the sender of emails, so the server does not start
+//! until they are set.
 
 use std::{fmt, net::SocketAddr, path::PathBuf, time::Duration};
 
@@ -21,6 +24,7 @@ use figment::{
     Figment,
     providers::{Env, Format, Serialized, Toml},
 };
+use lettre::Address;
 use serde::{Deserialize, Serialize};
 
 /// The environment variable that names the configuration file.
@@ -35,6 +39,7 @@ pub struct Config {
     pub monitoring: Monitoring,
     pub database: Database,
     pub realtime: Realtime,
+    pub email: Email,
     pub log: Log,
 }
 
@@ -128,6 +133,51 @@ pub struct Realtime {
     pub listen_retry_interval: Duration,
 }
 
+/// Transactional emails, such as email verification and password reset (IF-12). They go over SMTP
+/// to an external email delivery service (DE-01), which delivers them from a TwoViewer domain
+/// whose sender authentication (SPF, DKIM and DMARC) is set up with that service. The SMTP user
+/// name and password are secrets ([`SmtpCredentials`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Email {
+    /// The address emails come from, on the TwoViewer domain. There is no default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_address: Option<String>,
+    /// The SMTP server of the email delivery service. There is no default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smtp_host: Option<String>,
+    pub smtp_port: u16,
+    pub smtp_security: SmtpSecurity,
+    /// How long the SMTP server gets to answer each command, and to accept a connection.
+    #[serde(with = "humantime_serde")]
+    pub timeout: Duration,
+    /// How often an email is tried before it is given up, including the first attempt. Only
+    /// temporary failures are tried again, such as a refused connection or a 4xx reply; a 5xx
+    /// reply is final.
+    pub max_attempts: u32,
+    /// How long to wait before trying an email again. The wait doubles after each further
+    /// failure.
+    #[serde(with = "humantime_serde")]
+    pub retry_delay: Duration,
+    /// How many emails may wait to be sent, including those waiting to be tried again. Further
+    /// emails are dropped until there is room.
+    pub max_pending: usize,
+    /// How many connections to the SMTP server may be open at once.
+    pub max_connections: u32,
+}
+
+/// How the connection to the SMTP server is encrypted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SmtpSecurity {
+    /// Encrypted after connecting, with STARTTLS, which the server must offer. Usually port 587.
+    Starttls,
+    /// Encrypted from the start. Usually port 465.
+    Tls,
+    /// Not encrypted: for a local mail catcher in development only.
+    None,
+}
+
 /// Operational logs (MNT-03), written to standard output.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -200,6 +250,22 @@ impl Default for Realtime {
     }
 }
 
+impl Default for Email {
+    fn default() -> Self {
+        Self {
+            from_address: None,
+            smtp_host: None,
+            smtp_port: 587,
+            smtp_security: SmtpSecurity::Starttls,
+            timeout: Duration::from_secs(30),
+            max_attempts: 5,
+            retry_delay: Duration::from_secs(60),
+            max_pending: 1000,
+            max_connections: 10,
+        }
+    }
+}
+
 impl Default for Log {
     fn default() -> Self {
         Self {
@@ -227,6 +293,18 @@ pub enum ConfigError {
          tls.self_signed for development"
     )]
     CertificateSource,
+    #[error(
+        "invalid configuration: set email.from_address and email.smtp_host, the sender address \
+         and the SMTP server of the email delivery service"
+    )]
+    EmailServer,
+    #[error("invalid configuration: email.from_address is not an email address")]
+    FromAddress,
+    #[error(
+        "invalid configuration: with email.smtp_security = \"none\", SMTP_USERNAME and \
+         SMTP_PASSWORD would be sent unencrypted"
+    )]
+    CredentialsInClear,
     #[error("{0} is not set")]
     MissingSecret(&'static str),
 }
@@ -270,6 +348,8 @@ impl Config {
                 "realtime.listen_retry_interval",
                 self.realtime.listen_retry_interval,
             ),
+            ("email.timeout", self.email.timeout),
+            ("email.retry_delay", self.email.retry_delay),
         ] {
             if value < Duration::from_millis(1) {
                 return Err(ConfigError::TooShort { key });
@@ -284,6 +364,9 @@ impl Config {
                 "realtime.send_queue_length",
                 self.realtime.send_queue_length,
             ),
+            ("email.max_attempts", self.email.max_attempts as usize),
+            ("email.max_pending", self.email.max_pending),
+            ("email.max_connections", self.email.max_connections as usize),
         ] {
             if value == 0 {
                 return Err(ConfigError::TooSmall { key });
@@ -298,9 +381,22 @@ impl Config {
             &tls.private_key_file,
             tls.self_signed,
         ) {
-            (Some(_), Some(_), false) | (None, None, true) => Ok(()),
-            _ => Err(ConfigError::CertificateSource),
+            (Some(_), Some(_), false) | (None, None, true) => {}
+            _ => return Err(ConfigError::CertificateSource),
         }
+        self.email.server()?;
+        Ok(())
+    }
+}
+
+impl Email {
+    /// The sender address and the SMTP server, which have no defaults.
+    pub fn server(&self) -> Result<(Address, &str), ConfigError> {
+        let (Some(from), Some(host)) = (&self.from_address, &self.smtp_host) else {
+            return Err(ConfigError::EmailServer);
+        };
+        let from = from.parse().map_err(|_| ConfigError::FromAddress)?;
+        Ok((from, host))
     }
 }
 
@@ -308,19 +404,25 @@ impl Config {
 #[derive(Clone, Debug)]
 pub struct Secrets {
     pub database_url: DatabaseUrl,
+    /// For SMTP servers that require authentication, which those of email delivery services do.
+    pub smtp_credentials: Option<SmtpCredentials>,
 }
 
 impl Secrets {
     /// Reads the secrets from the environment.
     pub fn from_env() -> Result<Self, ConfigError> {
-        let database_url = std::env::var("DATABASE_URL")
-            .ok()
-            .filter(|url| !url.is_empty())
-            .ok_or(ConfigError::MissingSecret("DATABASE_URL"))?;
+        let database_url =
+            secret("DATABASE_URL").ok_or(ConfigError::MissingSecret("DATABASE_URL"))?;
         Ok(Self {
             database_url: DatabaseUrl::new(database_url),
+            smtp_credentials: SmtpCredentials::from_env()?,
         })
     }
+}
+
+/// The value of the environment variable `name`, unless it is unset or empty.
+fn secret(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
 /// A PostgreSQL connection URL. It contains the database password, so it never appears in logs
@@ -345,6 +447,49 @@ impl fmt::Debug for DatabaseUrl {
     }
 }
 
+/// The user name and password for the SMTP server. They never appear in logs (MNT-03): `Debug`
+/// hides them, and there is no `Display`.
+#[derive(Clone)]
+pub struct SmtpCredentials {
+    username: String,
+    password: String,
+}
+
+impl SmtpCredentials {
+    pub fn new(username: impl Into<String>, password: impl Into<String>) -> Self {
+        Self {
+            username: username.into(),
+            password: password.into(),
+        }
+    }
+
+    /// Reads `SMTP_USERNAME` and `SMTP_PASSWORD` from the environment: both, or neither for an
+    /// SMTP server without authentication.
+    pub fn from_env() -> Result<Option<Self>, ConfigError> {
+        match (secret("SMTP_USERNAME"), secret("SMTP_PASSWORD")) {
+            (Some(username), Some(password)) => Ok(Some(Self::new(username, password))),
+            (None, None) => Ok(None),
+            (Some(_), None) => Err(ConfigError::MissingSecret("SMTP_PASSWORD")),
+            (None, Some(_)) => Err(ConfigError::MissingSecret("SMTP_USERNAME")),
+        }
+    }
+
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+
+    /// The password itself, to authenticate with. Never log it.
+    pub fn expose_password(&self) -> &str {
+        &self.password
+    }
+}
+
+impl fmt::Debug for SmtpCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SmtpCredentials(..)")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use figment::Jail;
@@ -366,13 +511,29 @@ mod tests {
         });
     }
 
+    /// Sets the settings without a default: a certificate and the email server.
+    fn set_required(jail: &mut Jail) {
+        jail.set_env("TWOVIEWER_TLS__SELF_SIGNED", "true");
+        set_email_server(jail);
+    }
+
+    fn set_email_server(jail: &mut Jail) {
+        jail.set_env("TWOVIEWER_EMAIL__FROM_ADDRESS", "no-reply@twoviewer.test");
+        jail.set_env("TWOVIEWER_EMAIL__SMTP_HOST", "smtp.example.com");
+    }
+
     #[test]
     fn example_file_lists_every_setting_with_its_default() {
         let example: Config = Figment::from(Toml::string(EXAMPLE)).extract().unwrap();
 
         assert_eq!(example, Config::default());
-        // The certificate files have no default, so the example shows them commented out.
-        for key in ["certificate_file", "private_key_file"] {
+        // Settings without a default are shown commented out.
+        for key in [
+            "certificate_file",
+            "private_key_file",
+            "from_address",
+            "smtp_host",
+        ] {
             assert!(EXAMPLE.contains(&format!("# {key} = ")), "{key}");
         }
     }
@@ -390,9 +551,11 @@ mod tests {
     #[test]
     fn defaults_apply_without_file_or_environment() {
         jail(|jail| {
-            jail.set_env("TWOVIEWER_TLS__SELF_SIGNED", "true");
+            set_required(jail);
             let mut expected = Config::default();
             expected.tls.self_signed = true;
+            expected.email.from_address = Some("no-reply@twoviewer.test".to_owned());
+            expected.email.smtp_host = Some("smtp.example.com".to_owned());
 
             assert_eq!(Config::load().unwrap(), expected);
         });
@@ -408,6 +571,8 @@ mod tests {
             (true, false, true, false),
         ] {
             let mut config = Config::default();
+            config.email.from_address = Some("no-reply@twoviewer.test".to_owned());
+            config.email.smtp_host = Some("smtp.example.com".to_owned());
             config.tls.certificate_file = certificate.then(|| "tls.crt".into());
             config.tls.private_key_file = key.then(|| "tls.key".into());
             config.tls.self_signed = self_signed;
@@ -425,6 +590,7 @@ mod tests {
         jail(|jail| {
             jail.set_env("TWOVIEWER_TLS__CERTIFICATE_FILE", "/run/tls/tls.crt");
             jail.set_env("TWOVIEWER_TLS__PRIVATE_KEY_FILE", "/run/tls/tls.key");
+            set_email_server(jail);
 
             let tls = Config::load().unwrap().tls;
 
@@ -449,7 +615,7 @@ mod tests {
             jail.set_env(FILE_VAR, "config.toml");
             jail.set_env("TWOVIEWER_DATABASE__MIGRATION_LOCK_TIMEOUT", "250ms");
             jail.set_env("TWOVIEWER_LOG__FORMAT", "text");
-            jail.set_env("TWOVIEWER_TLS__SELF_SIGNED", "true");
+            set_required(jail);
 
             let config = Config::load().unwrap();
 
@@ -559,7 +725,7 @@ mod tests {
     #[test]
     fn hsts_max_age_may_be_zero() {
         jail(|jail| {
-            jail.set_env("TWOVIEWER_TLS__SELF_SIGNED", "true");
+            set_required(jail);
             jail.set_env("TWOVIEWER_HTTP__HSTS_MAX_AGE", "0s");
 
             assert_eq!(Config::load().unwrap().http.hsts_max_age, Duration::ZERO);
@@ -585,11 +751,97 @@ mod tests {
     }
 
     #[test]
-    fn database_url_is_not_formatted() {
+    fn secrets_are_not_formatted() {
         let secrets = Secrets {
             database_url: DatabaseUrl::new("postgres://app:hunter2@db/app"),
+            smtp_credentials: Some(SmtpCredentials::new("apikey-7", "hunter3")),
         };
 
-        assert!(!format!("{secrets:?}").contains("hunter2"));
+        let formatted = format!("{secrets:?}");
+
+        for secret in ["hunter2", "apikey-7", "hunter3"] {
+            assert!(!formatted.contains(secret), "{formatted}");
+        }
+    }
+
+    #[test]
+    fn email_needs_a_sender_and_a_server() {
+        jail(|jail| {
+            jail.set_env("TWOVIEWER_TLS__SELF_SIGNED", "true");
+            assert!(matches!(Config::load(), Err(ConfigError::EmailServer)));
+
+            jail.set_env("TWOVIEWER_EMAIL__FROM_ADDRESS", "no-reply@twoviewer.test");
+            assert!(matches!(Config::load(), Err(ConfigError::EmailServer)));
+
+            jail.set_env("TWOVIEWER_EMAIL__SMTP_HOST", "smtp.example.com");
+            let config = Config::load().unwrap();
+            let (from, host) = config.email.server().unwrap();
+            assert_eq!(from.to_string(), "no-reply@twoviewer.test");
+            assert_eq!(host, "smtp.example.com");
+        });
+    }
+
+    #[test]
+    fn the_sender_must_be_an_email_address() {
+        jail(|jail| {
+            set_required(jail);
+            jail.set_env("TWOVIEWER_EMAIL__FROM_ADDRESS", "TwoViewer");
+
+            assert!(matches!(Config::load(), Err(ConfigError::FromAddress)));
+        });
+    }
+
+    #[test]
+    fn smtp_security_is_one_of_three() {
+        jail(|jail| {
+            set_required(jail);
+            jail.set_env("TWOVIEWER_EMAIL__SMTP_SECURITY", "tls");
+            assert_eq!(
+                Config::load().unwrap().email.smtp_security,
+                SmtpSecurity::Tls
+            );
+
+            jail.set_env("TWOVIEWER_EMAIL__SMTP_SECURITY", "ssl");
+            assert!(Config::load().is_err());
+        });
+    }
+
+    #[test]
+    fn email_counts_must_be_positive() {
+        jail(|jail| {
+            set_required(jail);
+            jail.set_env("TWOVIEWER_EMAIL__MAX_ATTEMPTS", "0");
+
+            assert!(matches!(
+                Config::load(),
+                Err(ConfigError::TooSmall {
+                    key: "email.max_attempts"
+                })
+            ));
+        });
+    }
+
+    #[test]
+    fn smtp_credentials_come_in_pairs() {
+        jail(|jail| {
+            assert!(SmtpCredentials::from_env().unwrap().is_none());
+
+            jail.set_env("SMTP_USERNAME", "apikey");
+            assert!(matches!(
+                SmtpCredentials::from_env(),
+                Err(ConfigError::MissingSecret("SMTP_PASSWORD"))
+            ));
+
+            jail.set_env("SMTP_PASSWORD", "hunter3");
+            let credentials = SmtpCredentials::from_env().unwrap().unwrap();
+            assert_eq!(credentials.username(), "apikey");
+            assert_eq!(credentials.expose_password(), "hunter3");
+
+            jail.set_env("SMTP_USERNAME", "");
+            assert!(matches!(
+                SmtpCredentials::from_env(),
+                Err(ConfigError::MissingSecret("SMTP_USERNAME"))
+            ));
+        });
     }
 }

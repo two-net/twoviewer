@@ -27,7 +27,7 @@ TwoViewer: one word, with a capital T and V. It is never translated, shortened o
 | The browser tab, in browsers without SVG icons | `web/public/favicon.ico` (16, 32 and 48 px) | #16 |
 | Bookmarks and home-screen shortcuts on iOS | `web/public/apple-touch-icon.png` (180 px) | #16 |
 | The splash screen | | #21 |
-| Emails, as PNG because email clients don't show SVG | | #22 |
+| Emails, as PNG because email clients don't show SVG (96 px, shown at 48 px) | `server/templates/email/logo.png` | #22 |
 | Installers, and the Host Agent's icon in the operating system | | #34 |
 | The session indicator | | #39 |
 

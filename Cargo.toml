@@ -10,11 +10,16 @@ edition = "2024"
 
 [workspace.dependencies]
 anyhow = "1.0.104"
+# Email templates, checked when the server is compiled.
+askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "matched-path", "tokio", "ws"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 figment = { version = "0.10.19", features = ["env", "toml"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 humantime-serde = "1.1.1"
+# Sends transactional emails over SMTP (IF-12), with rustls and ring like the rest, and the
+# operating system's certificate store.
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "pool", "ring", "rustls-platform-verifier", "smtp-transport", "tokio1-rustls"] }
 prometheus-client = "0.25.1"
 # Randomizes reconnection delays (REL-05).
 rand = "0.10.3"

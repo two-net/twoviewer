@@ -4,12 +4,15 @@ The single server application (§2.2 of the SRS). At startup it applies pending 
 
 ## Running
 
-`docker compose up --build` at the repository root starts the server together with PostgreSQL ([`../README.md`](../README.md#running-the-server-side)). The image is built from [`Dockerfile`](Dockerfile). Against a database of your own, with a certificate of your own:
+`docker compose up --build` at the repository root starts the server together with PostgreSQL and Mailpit ([`../README.md`](../README.md#running-the-server-side)). The image is built from [`Dockerfile`](Dockerfile). Against a database of your own, with a certificate and an email delivery service of your own:
 
 ```sh
 DATABASE_URL=postgres://user:password@localhost/twoviewer \
 TWOVIEWER_TLS__CERTIFICATE_FILE=fullchain.pem \
 TWOVIEWER_TLS__PRIVATE_KEY_FILE=privkey.pem \
+TWOVIEWER_EMAIL__FROM_ADDRESS=no-reply@mail.twoviewer.example \
+TWOVIEWER_EMAIL__SMTP_HOST=smtp.email-service.example \
+SMTP_USERNAME=... SMTP_PASSWORD=... \
 cargo run -p twoviewer-server
 ```
 
@@ -30,6 +33,7 @@ Secrets are never settings and never go in source control (SEC-13). The server r
 | Variable | Secret |
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection URL, including the password |
+| `SMTP_USERNAME`, `SMTP_PASSWORD` | The user name and password for the SMTP server of the email delivery service ([Email](#email)). Both, or neither for a server without authentication. |
 
 To encrypt the connection to the database too, add `sslmode=verify-full` to the URL, and `sslrootcert=<file>` if the database certificate isn't signed by a public CA.
 
@@ -94,6 +98,28 @@ Others get `403`. Connections are anonymous until sign-in (#25, #26) and Host Ag
 
 The connections of Host Agents are counted in `twoviewer_host_agents_online`.
 
+## Email
+
+The server sends transactional emails: email verification, password reset, email change and security notifications. They go over SMTP to an external email delivery service (IF-12, DE-01). Any service that accepts SMTP works, such as Amazon SES, Postmark, Mailgun or SendGrid. The code is in [`src/email/`](src/email/mod.rs), and the templates are in [`templates/email/`](templates/email/).
+
+**Settings.** `email.from_address`, the address emails come from, and `email.smtp_host`, the service's SMTP server, have no defaults; the server doesn't start without them. The connection is encrypted with STARTTLS on port 587 (`email.smtp_security = "starttls"`, `email.smtp_port`), or from the start with `"tls"`, usually on port 465. The server checks the SMTP server's certificate against the operating system's certificate store. `"none"` sends without encryption, for a local mail catcher only, and is refused with credentials. The user name and password are the secrets `SMTP_USERNAME` and `SMTP_PASSWORD`.
+
+**Sender authentication.** Mail providers flag emails as spam unless the sending domain vouches for them (IF-12). Set this up with the email delivery service before launch:
+
+1. Send from a subdomain of the TwoViewer domain, such as `mail.twoviewer.example`, so that its reputation and DNS records are separate from other mail.
+2. **SPF:** set up the service's custom MAIL FROM (or Return-Path) domain on that subdomain, with the SPF record the service gives. The bounce address is then on the TwoViewer domain too, so SPF aligns for DMARC.
+3. **DKIM:** add the service's DKIM records (2048-bit keys) for the subdomain. The service signs every email.
+4. **DMARC:** add a `_dmarc` TXT record for the TwoViewer domain, such as `v=DMARC1; p=quarantine; rua=mailto:dmarc-reports@twoviewer.example`. Once the reports show only TwoViewer's own email passing, tighten it to `p=reject`.
+5. Send the test email to an address at a large provider, such as Gmail, and check its `Authentication-Results` header: it must show `spf=pass`, `dkim=pass` and `dmarc=pass`.
+
+**Test email.** `twoviewer-server send-test-email <address>` sends a test email with the server's settings and SMTP secrets, and prints the SMTP server's reply. It doesn't need the database. In a container: `docker compose exec server /usr/local/bin/twoviewer-server send-test-email <address>`.
+
+**Delivery.** Features queue emails, and requests return without waiting for the SMTP server, so a response doesn't reveal whether an address is registered (SEC-14). The server sends queued emails in the background, over at most `email.max_connections` connections. An email that fails for a temporary reason, such as a 4xx reply, a refused connection or a timeout (`email.timeout`), is tried again after `email.retry_delay`, and then after twice as long each time, up to `email.max_attempts` attempts. A 5xx reply is final. At most `email.max_pending` emails wait, including those waiting to be tried again; further emails are dropped. Queued emails are kept only in memory, because they contain single-use links whose tokens the database stores only as hashes (SEC-07). If the server crashes, the emails still waiting are lost, and people ask for the link again. On shutdown, the server finishes the attempts in progress after open requests, within `http.shutdown_timeout`, and abandons emails waiting to be tried again. The email delivery service doesn't affect readiness: while it is down, the server keeps serving, and emails fail.
+
+**Light and dark mode.** Emails have an HTML and a plain-text body, and their colors are the web client's. They are legible in clients in light or dark mode (THM-11): `layout.html` says how, and the tests check that every color has a dark counterpart and enough contrast. After changing the layout, look at the test email in Apple Mail, Gmail (web and app) and Outlook.com, in both modes. Mailpit's *HTML Check* tab lists what each client supports.
+
+**Logs.** Each attempt is logged with the email's name, such as `test`, its Message-ID, which the email delivery service's logs show too, the attempt number and the SMTP reply code. Recipients, subjects and content are never logged, because they are personal data and contain single-use links (MNT-03). Neither is the SMTP server's reply text, which can repeat the recipient's address.
+
 ## Logs
 
 Operational logs go to standard output, one JSON object per line (`log.format = "text"` for development). They are separate from audit events (MNT-03). Each request on the HTTPS listener gets a correlation ID: it is returned in the `x-request-id` header, is on every log line for that request (`span.correlation_id`), and is the `correlation_id` of the audit events the request records.
@@ -112,5 +138,7 @@ Logs never contain secrets or session content. Log route templates such as `/dev
 | `twoviewer_sign_ins_failed_total` | counter | | sign-in (#25) |
 | `twoviewer_http_requests_total` | counter | `route`, `status_class` (`2xx` … `5xx`) | every request on the HTTPS listener |
 | `twoviewer_migration_duration_seconds` | gauge | | the migrations at startup |
+| `twoviewer_emails_sent_total` | counter | | email, per email accepted by the email delivery service |
+| `twoviewer_emails_failed_total` | counter | | email, per email given up: rejected (5xx), failing on every attempt, dropped beyond `email.max_pending`, or abandoned at shutdown |
 
 Metrics that a feature doesn't report yet read 0.

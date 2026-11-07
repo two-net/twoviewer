@@ -4,11 +4,13 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+askama.workspace = true
 axum.workspace = true
 chrono.workspace = true
 figment.workspace = true
 futures-util.workspace = true
 humantime-serde.workspace = true
+lettre.workspace = true
 prometheus-client.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
