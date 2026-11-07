@@ -6,7 +6,8 @@
   padding-inline: var(--space-3);
 }
 
-// Below the button, aligned with its end so that it stays inside narrow windows.
+// Below the button, aligned with its end so that it stays inside narrow windows. It drops in and
+// fades, and fades out (ANI-01); `display` changes at the end of the closing transition.
 .panel {
   display: none;
   position: absolute;
@@ -22,9 +23,29 @@
   background: var(--color-bg);
   color: var(--color-text);
   box-shadow: var(--shadow);
+  opacity: 0;
+  transform: translateY(calc(-1 * var(--motion-distance)));
+  // While it closes, clicks reach the page (ANI-02).
+  pointer-events: none;
+  transition:
+    opacity var(--duration-short) var(--ease-in),
+    transform var(--duration-short) var(--ease-in),
+    display var(--duration-short) allow-discrete;
 
   &.open {
     display: block;
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+    transition-duration: var(--duration-medium);
+    transition-timing-function: var(--ease-out);
+  }
+}
+
+@starting-style {
+  .panel.open {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--motion-distance)));
   }
 }
 

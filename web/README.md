@@ -68,9 +68,11 @@ In [`src/app/shared/`](src/app/shared):
 | `localeDate`, `localeNumber` pipes | Dates, times and numbers ([below](#dates-times-and-numbers)). |
 | `ServerConnection` | The real-time connection to the server (IF-09, [below](#real-time-updates)). |
 | `Theme`, `<app-theme-picker>` | The theme option, and the radio buttons that choose it ([below](#theme)). |
-| `REDUCED_MOTION` | Whether motion should be reduced right now (ANI-04). Skip or shorten animations when it returns `true`. |
+| `Motion`, `<app-motion-picker>` | The motion option, and the radio buttons that choose it ([below](#motion)). |
+| `REDUCED_MOTION` | Whether motion should be reduced right now (ANI-04), from the motion option and the system's preference. Code that starts an animation itself, such as a view transition, checks it first. Styles don't need it ([below](#reduced-motion)). |
+| `<app-skeleton [rows]>` | A list that is loading, such as the devices or the audit log: placeholder rows that shimmer (ANI-08). |
 
-Style with the color tokens in [`src/styles.scss`](src/styles.scss) (`var(--color-text)` and so on), never fixed colors, so that every component works in both themes (THM-06) with enough contrast ([below](#colors-and-contrast)). CI fails on hex colors and color functions in component styles.
+Style with the color tokens in [`src/styles.scss`](src/styles.scss) (`var(--color-text)` and so on), never fixed colors, so that every component works in both themes (THM-06) with enough contrast ([below](#colors-and-contrast)). CI fails on hex colors and color functions in component styles. Animate with the motion tokens, never fixed durations or distances, so that reduced motion applies ([below](#motion)).
 
 ## Real-time updates
 
@@ -102,7 +104,7 @@ The theme option is Light, Dark or System, and System is the default (THM-01). E
 
 `Theme` (in `src/app/shared/theme/`) holds the option. `Theme.choose()` applies it at once with a cross-fade of 150 ms, a view transition that doesn't block clicks, or without one when motion is reduced (THM-03). It remembers the option in this browser's `localStorage`, so that the pages before sign-in use it (THM-04), and other open tabs follow. `<app-theme-picker>` is the choice as radio buttons, in Settings → Appearance and in the *Account* menu (THM-08).
 
-[`public/theme.js`](public/theme.js) applies the remembered option before the first paint, so that no frame, including the splash screen, shows the other theme (THM-05). `index.html` loads it in `<head>` without `async` or `defer`, so that it runs before the page is drawn. Keep it a small file: the Content Security Policy blocks inline scripts. It reads the same `localStorage` key as `Theme`, and a spec runs it to check that. Its name has no content hash, so once the server serves the web client, it must be served so that browsers check for a newer version.
+[`public/appearance.js`](public/appearance.js) applies the remembered option before the first paint, so that no frame, including the splash screen, shows the other theme (THM-05). It applies the remembered motion option too ([below](#reduced-motion)). `index.html` loads it in `<head>` without `async` or `defer`, so that it runs before the page is drawn. Keep it a small file: the Content Security Policy blocks inline scripts. It reads the same `localStorage` keys as `Theme` and `Motion`, and specs run it to check that. Its name has no content hash, so once the server serves the web client, it must be served so that browsers check for a newer version.
 
 Saving the option in the user's preferences, and applying it in every browser after sign-in (THM-04), comes with sign-in. The comment on `Theme.choose()` says where.
 
@@ -123,6 +125,46 @@ Both palettes meet WCAG 2.1 AA contrast (THM-07): 4.5:1 for text, and 3:1 for th
 [`src/app/shared/theme/palette.spec.ts`](src/app/shared/theme/palette.spec.ts) checks every pair of tokens that is used together, in both themes. Use a color only on a background it is paired with there, and an `on-` color only on its own color; for a new combination, add the pair to the spec. The spec also fails on a color token that is in no pair, unless it lists the token as decorative and says why. Controls that can't be used are exempt, which is why disabled buttons can be faded.
 
 In a remote session, the toolbar and the status bar have opaque `surface` backgrounds, never translucent ones over the remote screen, so that their contrast doesn't depend on what the remote screen shows. The hint overlay lies on the remote screen itself, whose colors the theme never changes (THM-09), so its colors are the same in both themes. Draw every label and grid line in both of them, such as a `hint` label with `on-hint` text and outline: they differ by more than 9:1, so one of them has at least 3:1 against any color of the remote screen.
+
+## Motion
+
+Animation shows what has changed (§4.4). These animate (ANI-01):
+
+| What | How |
+|---|---|
+| Moving to another screen | The page cross-fades: the router's view transition, timed by `screenTransition` (in `src/app/shared/motion/`). Not on the first screen of a page load. |
+| Dialogs | They grow and fade in, and fade out. |
+| Menus and panels, such as the *Account* menu and the navigation in narrow windows | They drop in and fade, and fade out. |
+| Toasts and the connection banner | They slide in and fade, and fade out, with Angular's `animate.enter` and `animate.leave`. |
+| Progress without a known end, such as reconnecting | `<span class="spinner" aria-hidden="true"></span>`, next to text that says what is happening. |
+| Lists that are loading | `<app-skeleton [rows]>`, with about as many rows as the list usually has (ANI-08). |
+| The theme | A cross-fade ([above](#theme)). |
+
+The splash screen, the session toolbar, Vim mode and device status come with their features, and follow the same rules:
+
+- Take durations, easings, distances and endless animations from the motion tokens in [`src/styles.scss`](src/styles.scss). Both durations are within 100–300 ms (ANI-02); only the splash screen's logo animation may last up to 1 second.
+
+  | Tokens | For |
+  |---|---|
+  | `--duration-medium`, `--ease-out` | What appears. |
+  | `--duration-short`, `--ease-in` | What goes away. |
+  | `--ease-in-out` | What changes in place, such as a cross-fade. |
+  | `--motion-distance`, `--motion-scale` | How far things slide, and the scale that dialogs grow from. |
+  | `--animation-busy`, `--animation-shimmer` | The spinner, and the skeleton's shimmer. |
+
+- Animate only `opacity` and `transform`. They move nothing else on the page (ANI-03), and the browser animates them without layout, at full frame rate. With `allow-discrete`, `display` and `overlay` change at the end of a transition, so that something stays drawn while it fades out; `@starting-style` is the state it fades in from.
+- Nothing waits for an animation (ANI-02). The state changes at once, and the animation only shows it. What is going away takes no pointer input (`pointer-events: none`), and neither do view transitions.
+- Nothing flashes more than three times per second (ANI-07). Endless animations take at least a second per cycle.
+- Status changes, such as a device going online or a new Vim mode, cross-fade in `--duration-short` rather than move.
+- In a remote session, only the Vim mode indicator, the hint overlay, the toolbar showing or hiding, and notifications may animate over the remote screen (ANI-06). The remote screen itself never animates.
+
+### Reduced motion
+
+With reduced motion, nothing slides or grows: what appears or goes away only fades, in `--duration-short`. Skeletons don't shimmer, the spinner pulses instead of turning, and screens and the theme change without a cross-fade (ANI-04, THM-03). The tokens do this, so a component that takes its values from them needs no code for it.
+
+Motion is reduced when the motion option, in Settings → Appearance, is Reduced, or System while the operating system or browser asks for less motion (ANI-05). `Motion` (in `src/app/shared/motion/`) holds the option as `Theme` holds the theme: it sets `data-motion="full"` or `"reduced"` on `<html>`, which `styles.scss` reads together with `prefers-reduced-motion`. It remembers the option in this browser, other tabs follow, and `appearance.js` applies it before the first paint, so that the splash screen follows it (SPL-07). Saving it in the user's preferences comes with sign-in, as for the theme. Changes to it are not audited (AUD-13).
+
+To try it, choose Reduced in Settings, or keep System and emulate `prefers-reduced-motion: reduce` in the browser's developer tools. In specs, `animate.enter` and `animate.leave` are off, which is TestBed's default, so elements go away at once.
 
 ## Text and translation
 

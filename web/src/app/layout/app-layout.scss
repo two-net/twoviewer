@@ -1,5 +1,6 @@
 // Narrow windows: the navigation is a list below the bar, opened with the menu button. The menu
-// and account buttons share the bar.
+// and account buttons share the bar. The list drops in and fades, and fades out (ANI-01); `display`
+// changes at the end of the closing transition.
 .menu-button {
   margin-left: auto;
   padding-inline: var(--space-3);
@@ -9,9 +10,29 @@
   display: none;
   flex-basis: 100%;
   order: 1;
+  opacity: 0;
+  transform: translateY(calc(-1 * var(--motion-distance)));
+  // While it closes, clicks reach the page (ANI-02).
+  pointer-events: none;
+  transition:
+    opacity var(--duration-short) var(--ease-in),
+    transform var(--duration-short) var(--ease-in),
+    display var(--duration-short) allow-discrete;
 
   &.open {
     display: block;
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+    transition-duration: var(--duration-medium);
+    transition-timing-function: var(--ease-out);
+  }
+}
+
+@starting-style {
+  .nav.open {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--motion-distance)));
   }
 }
 
@@ -42,11 +63,16 @@ a {
     display: none;
   }
 
+  // Always shown, so never animated, not even on the first frame.
   .nav {
     display: block;
     flex-basis: auto;
     order: 0;
     margin-left: auto;
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+    transition: none;
   }
 
   ul {

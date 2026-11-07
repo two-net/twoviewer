@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import bootScript from '../../../../public/theme.js' with { loader: 'text' };
+import bootScript from '../../../../public/appearance.js' with { loader: 'text' };
 import { REDUCED_MOTION } from '../motion/reduced-motion';
 import { THEME_STORAGE_KEY, Theme } from './theme';
 
@@ -174,8 +174,8 @@ describe('Theme', () => {
   });
 });
 
-// public/theme.js, which applies the remembered option before the first paint (THM-05).
-describe('theme.js', () => {
+// public/appearance.js, which applies the remembered option before the first paint (THM-05).
+describe('appearance.js: theme', () => {
   afterEach(cleanUp);
 
   function runBootScript(): void {

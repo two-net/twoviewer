@@ -3,6 +3,8 @@
   @for (toast of toasts.toasts(); track toast.id) {
     <div
       class="toast"
+      animate.enter="toast-enter"
+      animate.leave="toast-leave"
       (mouseenter)="toasts.hold(toast.id, 'hover')"
       (mouseleave)="toasts.release(toast.id, 'hover')"
       (focusin)="toasts.hold(toast.id, 'focus')"

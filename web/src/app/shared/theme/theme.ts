@@ -8,15 +8,15 @@ export type ThemeOption = 'light' | 'dark' | 'system';
 export const THEME_OPTIONS: readonly ThemeOption[] = ['light', 'dark', 'system'];
 
 /**
- * Where this browser remembers the option. `public/theme.js` reads it before the first paint, so
- * the two must agree.
+ * Where this browser remembers the option. `public/appearance.js` reads it before the first paint,
+ * so the two must agree.
  */
 export const THEME_STORAGE_KEY = 'twoviewer.theme';
 
 /** On `<html>` for Light and Dark. `styles.scss` sets `color-scheme` from it. */
 const THEME_ATTRIBUTE = 'data-theme';
 
-/** On `<html>` during the cross-fade, which `styles.scss` shortens to at most 200 ms (THM-03). */
+/** On `<html>` during the cross-fade, which `styles.scss` makes short (THM-03, at most 200 ms). */
 const CHANGING_CLASS = 'theme-change';
 
 function toOption(value: string | null | undefined): ThemeOption {
@@ -27,8 +27,8 @@ function toOption(value: string | null | undefined): ThemeOption {
  * The theme option: Light, Dark or System, which is the default (THM-01).
  *
  * It is remembered in this browser, so that the pages before sign-in use the last option chosen
- * here (THM-04). `public/theme.js` applies it before the first paint (THM-05), and this service
- * from then on. Other tabs follow a change.
+ * here (THM-04). `public/appearance.js` applies it before the first paint (THM-05), and this
+ * service from then on. Other tabs follow a change.
  *
  * The colors themselves come from the tokens in `styles.scss`. With System, the browser switches
  * them when the system's preference changes, without any code here (THM-02).
@@ -51,7 +51,7 @@ export class Theme {
   };
 
   constructor() {
-    // `theme.js` has done this already, unless it could not run.
+    // `appearance.js` has done this already, unless it could not run.
     this.apply(this.current());
     const window = this.document.defaultView;
     window?.addEventListener('storage', this.onStorage);

@@ -1,0 +1,24 @@
+:host {
+  display: block;
+}
+
+// The rows are decorative, so they need no contrast (THM-07).
+.row {
+  position: relative;
+  height: var(--control-height);
+  margin-bottom: var(--space-2);
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: var(--color-border);
+
+  // The shimmer: a lighter band that moves across, without changing the layout (ANI-03). With
+  // reduced motion there is no animation, and the band stays out of sight to the left.
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, var(--color-surface), transparent);
+    transform: translateX(-100%);
+    animation: var(--animation-shimmer);
+  }
+}

@@ -1,0 +1,33 @@
+<fieldset class="choices">
+  <legend i18n>Motion</legend>
+  <label>
+    <input
+      type="radio"
+      [name]="name"
+      value="system"
+      [checked]="motion.option() === 'system'"
+      (change)="motion.choose('system')"
+    />
+    <span i18n="Motion option|Follows the operating system or browser">System</span>
+  </label>
+  <label>
+    <input
+      type="radio"
+      [name]="name"
+      value="full"
+      [checked]="motion.option() === 'full'"
+      (change)="motion.choose('full')"
+    />
+    <span i18n="Motion option|All animations">Full</span>
+  </label>
+  <label>
+    <input
+      type="radio"
+      [name]="name"
+      value="reduced"
+      [checked]="motion.option() === 'reduced'"
+      (change)="motion.choose('reduced')"
+    />
+    <span i18n="Motion option|Fades only, so that nothing moves">Reduced</span>
+  </label>
+</fieldset>

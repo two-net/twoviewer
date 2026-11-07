@@ -15,3 +15,32 @@
   text-align: center;
   overflow-wrap: anywhere;
 }
+
+// Reconnecting is progress, so the spinner shows it (ANI-01).
+.spinner {
+  margin-inline-end: var(--space-2);
+}
+
+// The banner drops in and fades, and fades out (ANI-01). Angular adds these classes while it
+// appears and goes away, and removes it at the end. While it fades out, clicks go through (ANI-02).
+.banner-enter {
+  animation: banner-in var(--duration-medium) var(--ease-out);
+}
+
+.banner-leave {
+  animation: banner-out var(--duration-short) var(--ease-in) forwards;
+  pointer-events: none;
+}
+
+@keyframes banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--motion-distance)));
+  }
+}
+
+@keyframes banner-out {
+  to {
+    opacity: 0;
+  }
+}

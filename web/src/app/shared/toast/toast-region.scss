@@ -42,3 +42,27 @@
   line-height: 1;
   cursor: pointer;
 }
+
+// A toast rises and fades in, and fades out (ANI-01). Angular adds these classes while it appears
+// and goes away, and removes the toast at the end. While it fades out, clicks go through (ANI-02).
+.toast-enter {
+  animation: toast-in var(--duration-medium) var(--ease-out);
+}
+
+.toast-leave {
+  animation: toast-out var(--duration-short) var(--ease-in) forwards;
+  pointer-events: none;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-distance));
+  }
+}
+
+@keyframes toast-out {
+  to {
+    opacity: 0;
+  }
+}

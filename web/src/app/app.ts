@@ -3,6 +3,7 @@ import { RouterOutlet } from '@angular/router';
 import { SiteFooter } from './layout/site-footer';
 import { ConnectionBanner } from './shared/connection/connection-banner';
 import { ConfirmDialog } from './shared/confirm/confirm-dialog';
+import { Motion } from './shared/motion/motion';
 import { Theme } from './shared/theme/theme';
 import { ToastRegion } from './shared/toast/toast-region';
 
@@ -11,7 +12,8 @@ import { ToastRegion } from './shared/toast/toast-region';
  * the server (UI-05), the footer with the policy links (PRIV-04), the toasts (UI-08) and the
  * confirmation dialog (UI-03).
  *
- * It starts {@link Theme} on every page, so that a theme chosen in another tab applies here too.
+ * It starts {@link Theme} and {@link Motion} on every page, so that options chosen in another tab
+ * apply here too.
  */
 @Component({
   imports: [RouterOutlet, ConnectionBanner, SiteFooter, ToastRegion, ConfirmDialog],
@@ -22,6 +24,7 @@ import { ToastRegion } from './shared/toast/toast-region';
 export class App {
   constructor() {
     inject(Theme);
+    inject(Motion);
   }
 
   // A plain `#main` link would leave the page: `<base href="/">` resolves it to `/#main`.

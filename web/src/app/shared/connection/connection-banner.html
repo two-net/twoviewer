@@ -1,8 +1,9 @@
 <!-- Always present, so that screen readers announce the banner as it appears. -->
 <div class="region" role="status" aria-live="polite">
   @if (connection.lost()) {
-    <p class="banner" i18n>
-      Connection lost. Reconnecting… Until then, what you see may be out of date.
+    <p class="banner" animate.enter="banner-enter" animate.leave="banner-leave">
+      <span class="spinner" aria-hidden="true"></span>
+      <span i18n>Connection lost. Reconnecting… Until then, what you see may be out of date.</span>
     </p>
   }
 </div>

@@ -1,11 +1,11 @@
 // Global styles: design tokens, a small reset and the base look of text, links, buttons and
 // inputs. Components use the tokens, never fixed colors, so that they work in both themes
-// (THM-06).
+// (THM-06), and never fixed durations or distances, so that they follow the motion rules (§4.4).
 //
 // `light-dark()` picks the value for the resolved theme. With the System option, `color-scheme`
 // is `light dark` and follows the operating system's or browser's preference as it changes
-// (THM-02). The Light and Dark options set `data-theme` on `<html>` (`Theme`, and `theme.js` before
-// the first paint), which fixes it.
+// (THM-02). The Light and Dark options set `data-theme` on `<html>` (`Theme`, and `appearance.js`
+// before the first paint), which fixes it.
 //
 // Both palettes meet WCAG 2.1 AA contrast (THM-07): 4.5:1 for text, 3:1 for the borders of
 // controls, focus indicators and status graphics. `src/app/shared/theme/palette.spec.ts` checks
@@ -55,6 +55,26 @@
   // Tall enough to tap comfortably.
   --control-height: 2.75rem;
 
+  // Motion (ANI-02): interface transitions last 100–300 ms and ease. What appears takes the
+  // medium duration with `--ease-out`; what goes away takes the short one with `--ease-in`.
+  // Animate only `opacity` and `transform`, which move nothing else on the page (ANI-03).
+  --duration-short: 150ms;
+  --duration-medium: 250ms;
+  // Fast at first, then settling.
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  // Slow at first, then fast.
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  // For what changes in place, such as a cross-fade.
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  // How far menus, panels and toasts slide as they appear, and the scale dialogs grow from.
+  --motion-distance: 0.5rem;
+  --motion-scale: 0.96;
+  // Endless animations, with the keyframes below: progress without a known end, such as
+  // reconnecting, and the shimmer of loading placeholders (ANI-08). Neither changes more than
+  // three times per second (ANI-07).
+  --animation-busy: busy-turn 1s linear infinite;
+  --animation-shimmer: shimmer 1.5s var(--ease-in-out) infinite;
+
   // System fonts only: nothing is loaded from another origin (PRIV-05).
   font-family:
     system-ui,
@@ -76,15 +96,81 @@
   color-scheme: dark;
 }
 
+// Reduced motion (ANI-04): nothing slides or grows, so what appears or goes away only fades, and
+// briefly. Loading placeholders don't shimmer, and progress pulses instead of turning. It applies
+// with the Motion option Reduced, and with System while the operating system or browser asks for
+// less motion (ANI-05). `Motion` sets `data-motion` on `<html>` for Full and Reduced, and
+// `appearance.js` before the first paint. Components get all of this from the tokens.
+@mixin reduced-motion {
+  --duration-medium: var(--duration-short);
+  // With a unit, so that `calc()` with it stays a length.
+  --motion-distance: 0rem;
+  --motion-scale: 1;
+  --animation-busy: busy-pulse 2s var(--ease-in-out) infinite;
+  --animation-shimmer: none;
+}
+
+:root[data-motion='reduced'] {
+  @include reduced-motion;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion='full']) {
+    @include reduced-motion;
+  }
+}
+
+// Global, so that components can use them through the tokens. Angular renames only the keyframes
+// that a component defines itself.
+@keyframes busy-turn {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+// Progress without movement, for reduced motion: one slow pulse every 2 seconds.
+@keyframes busy-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@keyframes shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(100%);
+  }
+}
+
+// No animation may block input (ANI-02): clicks reach the page during every view transition.
+::view-transition {
+  pointer-events: none;
+}
+
+// A view transition has no animation unless a class below asks for one, so that the router's view
+// transition for a new screen ends at once with reduced motion.
+::view-transition-group(root) {
+  animation-duration: 0s;
+}
+
+// Changing screens cross-fades the page (ANI-01). `screenTransition` adds the class only for that
+// change, and not with reduced motion.
+:root.screen-change::view-transition-group(root) {
+  animation-duration: var(--duration-medium);
+}
+
 // Changing the theme cross-fades the whole page in at most 200 ms (THM-03). `Theme` adds the
 // class only for that change, and not with reduced motion.
 :root.theme-change::view-transition-group(root) {
-  animation-duration: 150ms;
+  animation-duration: var(--duration-short);
 }
 
-// No animation may block input (ANI-02): clicks reach the page during the cross-fade.
-:root.theme-change::view-transition {
-  pointer-events: none;
+:root::view-transition-old(root),
+:root::view-transition-new(root) {
+  animation-timing-function: var(--ease-in-out);
 }
 
 *,
@@ -191,12 +277,55 @@ textarea {
   }
 }
 
+// A group of radio buttons that choose an option, such as the theme (THM-08) or motion (ANI-05).
+.choices {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+
+  legend {
+    margin-bottom: var(--space-1);
+    padding: 0;
+    font-weight: 600;
+  }
+
+  label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--control-height);
+    cursor: pointer;
+  }
+
+  input {
+    width: 1.125rem;
+    height: 1.125rem;
+    margin: 0;
+    accent-color: var(--color-accent);
+  }
+}
+
 // The page content of a layout: from 360 px wide (UI-07) up to a readable width.
 .page {
   width: 100%;
   max-width: var(--content-width);
   margin-inline: auto;
   padding: var(--space-6) var(--space-4);
+}
+
+// Progress without a known end, such as reconnecting (ANI-01): a ring that turns, or pulses with
+// reduced motion (ANI-04). Put text next to it that says what is happening, and hide the ring from
+// assistive technologies with `aria-hidden="true"`.
+.spinner {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  border: 0.15em solid var(--color-border-strong);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  vertical-align: -0.125em;
+  animation: var(--animation-busy);
 }
 
 // Hidden on screen but read by assistive technologies.

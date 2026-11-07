@@ -10,7 +10,6 @@ let pickers = 0;
 @Component({
   selector: 'app-theme-picker',
   templateUrl: './theme-picker.html',
-  styleUrl: './theme-picker.scss',
 })
 export class ThemePicker {
   protected readonly theme = inject(Theme);

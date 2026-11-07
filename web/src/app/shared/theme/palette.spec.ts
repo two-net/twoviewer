@@ -43,7 +43,7 @@ const PAIRS: readonly (readonly [string, string, number, string])[] = [
 
 /** Colors that need no contrast, and why. */
 const DECORATIVE: Readonly<Record<string, string>> = {
-  border: 'separators',
+  border: 'separators, and the placeholder rows of a list that is loading',
   backdrop: 'dims the page behind a dialog',
 };
 
