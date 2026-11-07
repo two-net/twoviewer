@@ -6,6 +6,7 @@ Remote access and remote support, used through the browser. The requirements are
 |---|---|
 | [`server/`](server/README.md) | The server application (Rust) |
 | `agent/` | The Host Agent (Rust) |
+| [`brand/`](brand/README.md) | The product name and logo, and the rules for using them |
 | [`web/`](web/README.md) | The web client (Angular) |
 | `xtask/` | Development tasks, run as `cargo xtask <command>` |
 
@@ -45,13 +46,14 @@ The web client runs separately with `npm start` in `web/`.
 | Lints, including the SQL rules in [`clippy.toml`](clippy.toml) | `cargo clippy --workspace --all-targets -- -D warnings` |
 | Server tests, including all migrations on an empty database and the upgrade from the previous release | `cargo test` |
 | The migrations match the code model | `cargo xtask check-migrations` |
+| The icons match the logo ([`brand/README.md`](brand/README.md)) | `cargo xtask check-icons` |
 | Web client build and tests | `npm run build` and `npm test -- --watch=false` in `web/` |
 | Web client text is marked for translation ([`web/README.md`](web/README.md#text-and-translation)) | `npm run check:i18n` and `npx ng extract-i18n` in `web/` |
 | Crates with known vulnerabilities ([`deny.toml`](deny.toml)) | `cargo deny check advisories`, after `cargo install --locked cargo-deny` |
 | npm packages with known vulnerabilities | `npm audit` in `web/` |
 | The local start works, and the server image has no fixable vulnerabilities | `docker compose up`, then Trivy on the `twoviewer-server` image |
 
-The server tests and `cargo xtask` start PostgreSQL containers, so they need Docker. With Colima, see [`server/migrations/README.md`](server/migrations/README.md).
+The server tests and the `cargo xtask` migration commands start PostgreSQL containers, so they need Docker. With Colima, see [`server/migrations/README.md`](server/migrations/README.md).
 
 ### Releases
 

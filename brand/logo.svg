@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" color="#1f5fd6">
+  <title>TwoViewer</title>
+  <rect width="48" height="48" rx="10" fill="currentColor"/>
+  <rect x="7.5" y="10.5" width="21" height="12" rx="1.5" fill="none" stroke="#fff" stroke-width="3"/>
+  <rect x="15" y="15" width="30" height="21" rx="6" fill="currentColor"/>
+  <rect x="18" y="18" width="24" height="15" rx="3" fill="#fff"/>
+  <rect x="24" y="36" width="12" height="3" rx="1.5" fill="#fff"/>
+</svg>

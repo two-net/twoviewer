@@ -14,10 +14,18 @@
   padding: var(--space-2) var(--space-4);
 }
 
-// The logo comes with #16.
+// The logo and the name together (UI-01). The logo has no text alternative: the name follows it.
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   color: var(--color-text);
   font-size: 1.25rem;
   font-weight: 700;
   text-decoration: none;
+}
+
+.logo {
+  width: 1.75rem;
+  height: 1.75rem;
 }

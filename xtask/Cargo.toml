@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+resvg.workspace = true
 sea-orm = { workspace = true, features = ["schema-sync"] }
 sqlx.workspace = true
 testcontainers-modules.workspace = true

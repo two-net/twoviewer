@@ -1,4 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
+import { PRODUCT_NAME } from '../../product';
 
 /** An error as the user reads it: what happened, and what they can do (UI-06). */
 export interface UserError {
@@ -24,7 +25,7 @@ export function describeError(error: unknown, online = navigator.onLine): UserEr
     case 503:
     case 504:
       return {
-        summary: $localize`TwoViewer can't be reached right now.`,
+        summary: $localize`${PRODUCT_NAME}:product: can't be reached right now.`,
         action: $localize`Try again in a few minutes.`,
       };
     case 400:

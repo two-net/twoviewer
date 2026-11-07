@@ -787,7 +787,7 @@ Unless stated otherwise, targets apply under these **reference conditions**: the
 | OI-3 | Will the VPN later need access to other devices on the remote network? | Out of scope (VPN-03). |
 | OI-4 | Are the fair-use limits and relay caps affordable at the capacity targets? | AUTH-16, VPN-04, CAP-01. |
 | OI-5 | Is 365-day audit retention right for the legal requirements of the target markets? | RET-01. |
-| OI-6 | Logo, color palette, and splash animation. | To be supplied by design. |
+| OI-6 | Color palette and splash animation. | To be supplied by design. The logo is settled: two overlapping screens, the front one solid, in white on a rounded blue tile (UI-01). |
 | OI-7 | Is `Ctrl+\` `n` a good default escape sequence, given that `\` is awkward to type on some keyboard layouts? | Yes, because users can change it (VIM-04). |
 
 ---

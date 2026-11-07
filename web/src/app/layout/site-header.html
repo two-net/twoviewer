@@ -1,6 +1,9 @@
 <header class="site-header">
   <div class="bar">
-    <a class="brand" routerLink="/">{{ productName }}</a>
+    <a class="brand" routerLink="/">
+      <img class="logo" src="logo.svg" alt="" width="28" height="28" />
+      {{ productName }}
+    </a>
     <ng-content />
   </div>
 </header>

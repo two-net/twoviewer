@@ -62,6 +62,22 @@ describe('App', () => {
     ]);
   });
 
+  // The remote session view fills the window, without a header.
+  it.each(pages.filter((url) => !url.startsWith('/sessions/')))(
+    'shows the logo and product name at the top of %s (UI-01)',
+    async (url) => {
+      const page = await open(url);
+
+      const brand = page.querySelector<HTMLAnchorElement>('header a.brand')!;
+      expect(brand.getAttribute('href')).toBe('/');
+      expect(brand.textContent?.trim()).toBe('TwoViewer');
+      const logo = brand.querySelector('img')!;
+      expect(logo.getAttribute('src')).toBe('logo.svg');
+      // The name follows the logo, so the logo has no text alternative of its own.
+      expect(logo.getAttribute('alt')).toBe('');
+    },
+  );
+
   it('opens on the devices, the home screen', async () => {
     const page = await open('/');
 

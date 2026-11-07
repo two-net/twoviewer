@@ -1,4 +1,4 @@
-# TwoviewerWeb
+# TwoViewer web client
 
 This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 22.2.4.
 
@@ -49,7 +49,7 @@ ng test
 [`src/app/app.routes.ts`](src/app/app.routes.ts) has a route for every screen in §4.1 of the SRS. Each screen is in the folder of its feature (`accounts/`, `devices/`, `sessions/`, `vpn/`, `audit/`, `settings/`, `operations/`, `legal/`, `errors/`), and its code is downloaded when it is first opened. A screen sits in one of two layouts:
 
 - `layout/app-layout`: the signed-in screens, with the main navigation. Below 48rem wide, the navigation opens from a *Menu* button.
-- `layout/plain-layout`: the visitor screens, the host page, the policies and the error pages, with the product name only.
+- `layout/plain-layout`: the visitor screens, the host page, the policies and the error pages, with the logo and product name only.
 
 The remote session view has no layout and fills the window. The root component, [`src/app/app.html`](src/app/app.html), adds what every page has: a skip link, the footer with the Terms of Service and Privacy Notice (PRIV-04), the toasts and the confirmation dialog. `/terms` and `/privacy` are placeholders until the texts are written.
 
@@ -69,6 +69,10 @@ In [`src/app/shared/`](src/app/shared):
 
 Style with the color tokens in [`src/styles.scss`](src/styles.scss) (`var(--color-text)` and so on), never fixed colors, so that every component works in both themes (THM-06). The colors are provisional until the palettes are designed (#19).
 
+## Name and logo
+
+Both layouts start with the logo and the product name, which link to the home screen (UI-01). The remote session view has no header, and shows them in the browser tab. The logo, [`public/logo.svg`](public/logo.svg), and the icons beside it (`favicon.ico` and `apple-touch-icon.png`) are made from [`brand/logo.svg`](../brand/logo.svg) by `cargo xtask icons`, so don't edit them here. [`brand/README.md`](../brand/README.md) has the rules for the name and the logo.
+
 ## Text and translation
 
 The interface is in English, and all text must be translatable later without code changes (A11Y-04). We use Angular's built-in i18n:
@@ -76,7 +80,7 @@ The interface is in English, and all text must be translatable later without cod
 - In templates, mark text with `i18n`, and attributes that people read or hear (`aria-label`, `title`, `alt`, `placeholder`) with `i18n-<attribute>`. Add `i18n="meaning|description"` when a translator would need context.
 - In TypeScript, write text as `` $localize`…` ``, including route titles.
 - Put templates in `.html` files, not inline in components.
-- Don't translate the product name. Use `PRODUCT_NAME` from `src/app/product.ts`.
+- Don't translate the product name. Use `PRODUCT_NAME` from `src/app/product.ts`; `npm run check:i18n` fails on text that spells it out.
 
 `npm run check:i18n` fails on template text that isn't marked, and `npx ng extract-i18n` writes the marked text to the file that translators work on. CI runs both. Adding a language later means a translation file and a locale in `angular.json`, with one build per language.
 

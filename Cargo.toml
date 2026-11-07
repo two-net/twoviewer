@@ -16,6 +16,8 @@ figment = { version = "0.10.19", features = ["env", "toml"] }
 humantime-serde = "1.1.1"
 prometheus-client = "0.25.1"
 rcgen = "0.14.10"
+# Renders the logo for `cargo xtask icons`. It has no text, so no fonts or text shaping.
+resvg = { version = "0.49.0", default-features = false }
 # rustls and tokio-rustls with ring, which sqlx already uses. Their default features would also
 # build aws-lc-rs.
 rustls = { version = "0.23.46", default-features = false, features = ["logging", "ring", "std", "tls12"] }

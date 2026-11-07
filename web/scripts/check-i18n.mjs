@@ -2,6 +2,9 @@
 // template text, and every attribute that people read or hear, has an `i18n` marker, so that
 // `ng extract-i18n` finds it. Text in TypeScript uses `$localize`, which review checks.
 //
+// It also checks that text takes the product name from `PRODUCT_NAME` instead of spelling it
+// out, where translators could change it (UI-01).
+//
 // Templates must be .html files, so that this check sees all of them.
 //
 // Usage: node scripts/check-i18n.mjs (from web/). Exits with 1 and lists the problems if any.
@@ -25,6 +28,14 @@ const TEXT_ATTRIBUTES = new Set([
 ]);
 const LETTER = /\p{L}/u;
 const INTERPOLATION = /\{\{[\s\S]*?\}\}/g;
+const PRODUCT_FILE = join(SOURCE, 'app', 'product.ts');
+const PRODUCT_NAME = readFileSync(PRODUCT_FILE, 'utf8').match(/PRODUCT_NAME = '([^']+)'/)?.[1];
+if (!PRODUCT_NAME) {
+  throw new Error(`PRODUCT_NAME not found in ${PRODUCT_FILE}`);
+}
+const NAME_PROBLEM = `the product name in text; use PRODUCT_NAME from ${PRODUCT_FILE}`;
+/** A `$localize` text, up to its closing backtick. */
+const LOCALIZE = /\$localize`(?:[^`\\]|\\.)*`/g;
 
 class Checker extends TmplAstRecursiveVisitor {
   /** How many of the enclosing elements are marked, so that their content is too. */
@@ -50,12 +61,18 @@ class Checker extends TmplAstRecursiveVisitor {
     if (!this.marked && LETTER.test(text.value)) {
       this.report(text, `text without i18n: "${text.value.trim()}"`);
     }
+    if (text.value.includes(PRODUCT_NAME)) {
+      this.report(text, NAME_PROBLEM);
+    }
   }
 
   visitBoundText(text) {
     const literal = text.value.source.replace(INTERPOLATION, '');
     if (!this.marked && LETTER.test(literal)) {
       this.report(text, `text without i18n: "${literal.trim()}"`);
+    }
+    if (literal.includes(PRODUCT_NAME)) {
+      this.report(text, NAME_PROBLEM);
     }
   }
 
@@ -69,6 +86,9 @@ class Checker extends TmplAstRecursiveVisitor {
     for (const attribute of attributes) {
       if (TEXT_ATTRIBUTES.has(attribute.name) && LETTER.test(attribute.value) && !attribute.i18n) {
         this.report(attribute, `${attribute.name} without i18n-${attribute.name}`);
+      }
+      if (TEXT_ATTRIBUTES.has(attribute.name) && attribute.value.includes(PRODUCT_NAME)) {
+        this.report(attribute, NAME_PROBLEM);
       }
     }
   }
@@ -90,8 +110,15 @@ const problems = [];
 for (const entry of readdirSync(SOURCE, { recursive: true })) {
   const file = join(SOURCE, entry);
   if (file.endsWith('.ts') && !file.endsWith('.spec.ts')) {
-    if (/\btemplate\s*:/.test(readFileSync(file, 'utf8'))) {
+    const code = readFileSync(file, 'utf8');
+    if (/\btemplate\s*:/.test(code)) {
       problems.push(`${file}: inline template; use templateUrl`);
+    }
+    for (const text of code.matchAll(LOCALIZE)) {
+      if (text[0].includes(PRODUCT_NAME)) {
+        const line = code.slice(0, text.index).split('\n').length;
+        problems.push(`${file}:${line}: ${NAME_PROBLEM}`);
+      }
     }
   } else if (file.endsWith('.html') && file !== join(SOURCE, 'index.html')) {
     const parsed = parseTemplate(readFileSync(file, 'utf8'), file, { preserveWhitespaces: false });
@@ -107,7 +134,7 @@ for (const entry of readdirSync(SOURCE, { recursive: true })) {
 if (problems.length > 0) {
   console.error(problems.join('\n'));
   console.error(
-    `\n${problems.length} problem(s). Mark user-facing text with i18n (web/README.md).`,
+    `\n${problems.length} problem(s). Mark user-facing text with i18n, and write the product name as PRODUCT_NAME (web/README.md).`,
   );
   process.exit(1);
 }

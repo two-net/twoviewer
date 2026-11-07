@@ -44,6 +44,9 @@ jobs:
       - run: cargo test --locked
       - name: Migrations match the code model
         run: cargo xtask check-migrations
+      # The web client's icons are made from brand/logo.svg (UI-01).
+      - name: Icons match the logo
+        run: cargo xtask check-icons
 
   web:
     runs-on: ubuntu-latest

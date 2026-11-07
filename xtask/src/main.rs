@@ -2,8 +2,12 @@
 //!
 //! - `new-migration <name>` generates a migration from the changes to the code model (DB-03).
 //! - `check-migrations` fails if the migrations and the code model differ (MNT-05).
+//! - `icons` writes the icons made from the logo, `brand/logo.svg` (UI-01).
+//! - `check-icons` fails if those icons are missing or don't match the logo.
 //!
-//! Both work on a throwaway PostgreSQL container, so they need Docker.
+//! The migration commands work on a throwaway PostgreSQL container, so they need Docker.
+
+mod icons;
 
 use std::{
     env, fs,
@@ -27,7 +31,9 @@ use twoviewer_server::{
 const POSTGRES_TAG: &str = "18-alpine";
 
 const USAGE: &str = "usage: cargo xtask new-migration <snake_case_name>
-       cargo xtask check-migrations";
+       cargo xtask check-migrations
+       cargo xtask icons
+       cargo xtask check-icons";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -35,6 +41,8 @@ async fn main() -> ExitCode {
     let result = match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         ["new-migration", name] => new_migration(name).await,
         ["check-migrations"] => check_migrations().await,
+        ["icons"] => icons::write(),
+        ["check-icons"] => icons::check(),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::FAILURE;
