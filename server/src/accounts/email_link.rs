@@ -1,5 +1,5 @@
-//! Single-use links sent by email (EmailLink in §5.2), such as the one that verifies an address
-//! (AUTH-02).
+//! Single-use links sent by email (EmailLink in §5.2): the ones that verify an address (AUTH-02)
+//! and reset a password (AUTH-07).
 //!
 //! A link carries a random [`Token`]. The database stores only its hash (SEC-07,
 //! [`super::token`]), so a copy of the database cannot be used to open links. Links are kept for
@@ -47,6 +47,8 @@ impl ActiveModelBehavior for ActiveModel {}
 pub enum Purpose {
     /// Verifies the email address of a new account (AUTH-02).
     VerifyEmail,
+    /// Sets a new password for an account whose password was forgotten (AUTH-07).
+    ResetPassword,
 }
 
 /// Stores a new link for `purpose` to `user_id`, valid for `lifetime`, and returns its token.

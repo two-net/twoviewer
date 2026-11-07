@@ -42,6 +42,11 @@
   }
 }
 
+// Long addresses wrap rather than widen the page (UI-07).
+.address {
+  overflow-wrap: anywhere;
+}
+
 // Other ways through a step, below its form.
 .other-ways {
   display: flex;

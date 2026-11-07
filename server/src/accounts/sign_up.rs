@@ -295,7 +295,8 @@ pub(super) fn parse_email(email: &str) -> Result<EmailAddress, FieldError> {
     }
 }
 
-fn password_error(rejected: Rejected) -> FieldErrors {
+/// Why `password` breaks the rules for new passwords. Password reset reports it this way too.
+pub(super) fn password_error(rejected: Rejected) -> FieldErrors {
     let error = match rejected {
         Rejected::TooShort { min } => FieldError::min("too_short", min),
         Rejected::TooLong { max } => FieldError::max("too_long", max),

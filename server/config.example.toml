@@ -187,6 +187,24 @@ sign_in_step_timeout = "5m"
 # lets one more code through per guess.
 clock_skew_steps = 1
 
+[password_reset]
+# Password reset by email (AUTH-07) and its protection against abuse (SEC-08). Requests are
+# counted per network, one IPv4 address or one IPv6 /64, and reset emails per address, both in
+# memory by each instance.
+# How long a reset link works.
+link_lifetime = "1h"
+# The time over which reset requests from one network are counted.
+window = "1h"
+# How many reset requests one network may make within the window. Further ones are refused until
+# the window has moved on.
+max_per_network = 20
+# How many networks are counted at once, so that counting takes bounded memory. While that many
+# are, requests from other networks aren't counted; the limit per address still holds.
+max_tracked_networks = 100000
+# The least time between two reset emails to one address, so that reset requests cannot be used
+# to flood someone's inbox. Requests in between still get the same answer, but no email.
+email_interval = "5m"
+
 [log]
 # "json" (one object per line, for log collectors) or "text" (for development).
 format = "json"

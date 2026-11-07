@@ -13,8 +13,3 @@
     accent-color: var(--color-accent);
   }
 }
-
-// Long addresses wrap rather than widen the page (UI-07).
-.address {
-  overflow-wrap: anywhere;
-}

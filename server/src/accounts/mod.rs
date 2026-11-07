@@ -18,6 +18,18 @@
 //! devices or start sessions (AUTH-02). Pairing (#36) and sessions (#42, #43) must refuse users
 //! for whom [`user::Model::is_verified`] is false.
 //!
+//! # Password reset
+//!
+//! People who forgot their password get a link by email that sets a new one (AUTH-07,
+//! [`password_reset`]):
+//!
+//! - `POST /api/password-reset` emails the link. It answers `202`, the same whether or not the
+//!   address is registered (SEC-14), or `422` or `429`.
+//! - `POST /api/password-reset/check` answers `200` with the link's address while the link works,
+//!   or `410`.
+//! - `POST /api/password-reset/complete` sets the new password with the token from the link, and
+//!   revokes all of the account's sign-ins. It answers `204`, `410` or `422`.
+//!
 //! # Sign-in
 //!
 //! - `POST /api/sign-in` signs in with an email address and a password (AUTH-05). It answers `204`
@@ -80,8 +92,9 @@
 //! - `POST /api/sign-out` ends the one of the request, and answers `204` with a cookie that
 //!   removes it, also when it had already ended.
 //!
-//! **Revoking all of a user's sign-ins.** Password reset (AUTH-07, #28), account deletion
-//! (AUTH-14, #30) and suspension (OPS-03, #68) do this, in the transaction of their change:
+//! **Revoking all of a user's sign-ins.** Password reset (AUTH-07, [`password_reset`]) does this,
+//! and account deletion (AUTH-14, #30) and suspension (OPS-03, #68) must, in the transaction of
+//! their change:
 //!
 //! ```ignore
 //! sign_in_session::revoke(&txn, user_id, Revoke::All, Action::SignInSessionRevoked, actor, correlation_id)
@@ -136,6 +149,7 @@ pub mod legal;
 mod limits;
 pub mod mfa;
 pub mod password;
+mod password_reset;
 pub mod pending_sign_in;
 mod reauthenticate;
 mod sign_in;
@@ -184,6 +198,12 @@ pub const SIGN_OUT_PATH: &str = "/api/sign-out";
 pub const SIGN_IN_SECOND_FACTOR_PATH: &str = "/api/sign-in/second-factor";
 /// The path of re-authentication in the API.
 pub const REAUTHENTICATE_PATH: &str = "/api/reauthenticate";
+/// The path that emails a password reset link in the API.
+pub const PASSWORD_RESET_PATH: &str = "/api/password-reset";
+/// The path that says whether a password reset link still works in the API.
+pub const PASSWORD_RESET_CHECK_PATH: &str = "/api/password-reset/check";
+/// The path that sets a new password with a password reset link in the API.
+pub const PASSWORD_RESET_COMPLETE_PATH: &str = "/api/password-reset/complete";
 /// The path of the signed-in user's MFA settings in the API.
 pub const MFA_PATH: &str = "/api/mfa";
 /// The path that starts setting up an authenticator app in the API.
@@ -207,6 +227,7 @@ pub struct Accounts {
     sign_up: config::SignUp,
     sign_in: config::SignIn,
     mfa: config::Mfa,
+    password_reset: config::PasswordReset,
     /// Encrypts the secrets of authenticator apps (SEC-07).
     mfa_cipher: Cipher,
     /// How long sign-ins last.
@@ -216,7 +237,7 @@ pub struct Accounts {
 }
 
 impl Accounts {
-    /// Uses the `accounts`, `sign_up`, `sign_in` and `mfa` sections of `config`.
+    /// Uses the `accounts`, `sign_up`, `sign_in`, `mfa` and `password_reset` sections of `config`.
     pub fn new(
         db: DatabaseConnection,
         mailer: Mailer,
@@ -235,9 +256,10 @@ impl Accounts {
             sign_up: config.sign_up.clone(),
             sign_in: config.sign_in.clone(),
             mfa: config.mfa.clone(),
+            password_reset: config.password_reset.clone(),
             mfa_cipher: Cipher::new(mfa_encryption_key),
             lifetime: Lifetime::new(&config.sign_in),
-            limits: Limits::new(&config.sign_up, &config.sign_in),
+            limits: Limits::new(&config.sign_up, &config.sign_in, &config.password_reset),
             metrics,
         })
     }
@@ -248,6 +270,9 @@ impl Accounts {
         Router::new()
             .route(SIGN_UP_PATH, post(sign_up::sign_up))
             .route(VERIFY_EMAIL_PATH, post(verify_email::verify_email))
+            .route(PASSWORD_RESET_PATH, post(password_reset::request))
+            .route(PASSWORD_RESET_CHECK_PATH, post(password_reset::check))
+            .route(PASSWORD_RESET_COMPLETE_PATH, post(password_reset::complete))
             .route(SIGN_IN_PATH, post(sign_in::sign_in))
             .route(
                 SIGN_IN_SECOND_FACTOR_PATH,

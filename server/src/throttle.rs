@@ -19,7 +19,8 @@
 //!    forgets the failures, unless a concurrent failure has just started a block.
 //!
 //! Attempts during a block aren't counted, so a block ends `block_for` after it started, however
-//! often someone tries meanwhile.
+//! often someone tries meanwhile. Only [`clear`] ends one early: a password reset (AUTH-07) lifts
+//! the block on sign-in with the address, whose owner has just chosen a new password.
 
 use std::time::Duration;
 
@@ -185,6 +186,16 @@ pub async fn clear_unless_blocked<C: ConnectionTrait>(
         Entity::delete_by_id(stored.id).exec(db).await?;
     }
     Ok(status)
+}
+
+/// Forgets the failures of `subject` in `scope`, and lifts its block if it has one.
+pub async fn clear<C: ConnectionTrait>(db: &C, scope: Scope, subject: &[u8]) -> Result<(), DbErr> {
+    Entity::delete_many()
+        .filter(Column::Scope.eq(scope))
+        .filter(Column::Subject.eq(subject.to_vec()))
+        .exec(db)
+        .await?;
+    Ok(())
 }
 
 fn find(scope: Scope, subject: &[u8]) -> Select<Entity> {

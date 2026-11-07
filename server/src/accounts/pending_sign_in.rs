@@ -8,7 +8,8 @@
 //!
 //! A pending sign-in lasts `mfa.sign_in_step_timeout`. It is deleted when the second step
 //! completes, and expired ones are deleted in small batches whenever a new one is stored, so the
-//! table holds little and nothing for long.
+//! table holds little and nothing for long. A password reset deletes all of the user's
+//! ([`remove_all`]): they were started with the old password.
 
 use std::time::Duration;
 
@@ -103,6 +104,16 @@ pub async fn complete<C: ConnectionTrait>(db: &C, id: Uuid) -> Result<bool, DbEr
         .exec(db)
         .await?;
     Ok(deleted.rows_affected == 1)
+}
+
+/// Deletes all of `user_id`'s pending sign-ins, such as when their password is reset (AUTH-07):
+/// a pending sign-in shows that someone knew the old password.
+pub async fn remove_all<C: ConnectionTrait>(db: &C, user_id: Uuid) -> Result<(), DbErr> {
+    Entity::delete_many()
+        .filter(Column::UserId.eq(user_id))
+        .exec(db)
+        .await?;
+    Ok(())
 }
 
 /// The `Set-Cookie` header value that gives the browser the token of its pending sign-in.

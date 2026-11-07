@@ -181,11 +181,11 @@ People sign in with their email address and password, and with MFA on, a code as
 
 **Expiry (AUTH-09).** A sign-in ends after `sign_in.idle_timeout` (7 days) without use, and at the latest `sign_in.session_lifetime` (30 days) after sign-in, however much it is used. Every request that it authenticates is use: it sets `last_active_at` to now and `expires_at` to the earlier of the two ends. That write happens at most once a minute per sign-in, so a burst of requests writes once, and a sign-in can end up to a minute early. The cookie is kept for `sign_in.session_lifetime`; the server ends the sign-in earlier if it isn't used. Ended sign-ins are kept for 30 days after `coalesce(revoked_at, expires_at)`, then deleted by the retention job (Table 5.3-A, #66).
 
-**Revoking.** The user sees their active sign-ins in Settings and can revoke any of them, or all but the one they are using (AUTH-09); signing out revokes the one they are using. Another user's sign-in gets the same `410` as one that has ended, so its ID reveals nothing (AUTH-17). Revoking closes the browser's real-time connection, which takes it to the sign-in page, and tells the user's other browsers to reload their list (`sign_ins.changed`). Password reset (#28), account deletion (#30) and suspension (#68) revoke all of a user's sign-ins with `sign_in_session::revoke(.., Revoke::All, ..)`, in the transaction of their change.
+**Revoking.** The user sees their active sign-ins in Settings and can revoke any of them, or all but the one they are using (AUTH-09); signing out revokes the one they are using. Another user's sign-in gets the same `410` as one that has ended, so its ID reveals nothing (AUTH-17). Revoking closes the browser's real-time connection, which takes it to the sign-in page, and tells the user's other browsers to reload their list (`sign_ins.changed`). [Password reset](#password-reset) revokes all of a user's sign-ins with `sign_in_session::revoke(.., Revoke::All, ..)`, in the transaction of its change, and account deletion (#30) and suspension (#68) must do the same.
 
 **Not revealing who has an account (SEC-14).** A wrong password and an address without an account get the same `401`, and the password is hashed either way, so the answer takes as long. Blocks work the same way: they are per address, whether or not it has an account.
 
-**Blocks (AUTH-08).** After `sign_in.max_failures` (10) failed sign-ins with one address within `sign_in.failure_window` (15 minutes, a sliding window), sign-in with that address answers `429` for `sign_in.block_duration` (15 minutes), even with the right password, without checking it. Attempts during a block don't count, so a block ends on time however often someone tries. A successful sign-in forgets the failures. When a block starts, the owner of the account, if there is one, gets an email that says so and links to the password reset. The counts are in the `throttle` table, so every instance sees the same counts and a restart doesn't lift a block. They are kept under the SHA-256 of the address, and deleted once their failures have left the window and their block has ended. Anyone can block sign-in with someone else's address for a while by guessing wrong ten times. That is the price of the requirement, and the owner can still reset their password.
+**Blocks (AUTH-08).** After `sign_in.max_failures` (10) failed sign-ins with one address within `sign_in.failure_window` (15 minutes, a sliding window), sign-in with that address answers `429` for `sign_in.block_duration` (15 minutes), even with the right password, without checking it. Attempts during a block don't count, so a block ends on time however often someone tries. A successful sign-in forgets the failures. When a block starts, the owner of the account, if there is one, gets an email that says so and links to the password reset. The counts are in the `throttle` table, so every instance sees the same counts and a restart doesn't lift a block. They are kept under the SHA-256 of the address, and deleted once their failures have left the window and their block has ended. Anyone can block sign-in with someone else's address for a while by guessing wrong ten times. That is the price of the requirement, and the owner can still reset their password, which lifts the block.
 
 **Networks (SEC-08).** Past `sign_in.max_failures_per_network` (50) failed sign-ins within the window, a network (an IPv4 address or an IPv6 /64) gets `429` until the window has moved on, before any password is hashed. This slows down guessing across many addresses, which the limit per address doesn't catch. Like the sign-up limits, it is counted in memory by each instance, for at most `sign_in.max_tracked_networks` networks, and no IP addresses are stored.
 
@@ -229,6 +229,40 @@ Sensitive changes need the password, and with MFA on a code as well, to have bee
 **For new features.** A handler for a sensitive change takes `accounts::RecentlyAuthenticated` instead of `SignedIn`. It answers `428` (`reauthentication_required`) when the last authentication is too old, with `secondFactor` saying whether a code is needed. The web client then asks for the password, and the code, re-authenticates, and sends the request again.
 
 **Guessing.** A wrong password counts toward the same block as failed sign-ins with the user's address (AUTH-08), and a wrong code toward the same block as the second step of sign-in, so a stolen sign-in cookie gives no more guesses at either. A block that re-authentication starts is audited and emailed as at sign-in. Every attempt records `reauthenticated`, with its outcome and the sign-in's ID, and with `second_factor` when a code was needed.
+
+## Password reset
+
+People who forgot their password get a link by email that sets a new one (AUTH-07). The code is in [`src/accounts/password_reset.rs`](src/accounts/password_reset.rs), and the settings are in `[password_reset]`.
+
+| Request | Answers |
+|---|---|
+| `POST /api/password-reset` with `email` | `202`, whether or not the address is registered; `422` for something that isn't an address; `429` with `Retry-After` when the network has asked too often |
+| `POST /api/password-reset/check` with the `token` from the link | `200` with the `email` of the link's account while the link works; `410` (`link_expired`) for a link that has been used or has expired, or doesn't exist |
+| `POST /api/password-reset/complete` with `token` and `password` | `204` once the password is set; `410` (`link_expired`); `422` for a password that breaks the [rules](#passwords) |
+
+**Not revealing who has an account (SEC-14).** Asking for a reset answers `202` with no body whether or not the address has an account. Only an address with an account gets an email, so the endpoint can't be used to send email to anyone else. Both cases look the account up and record an audit event in one transaction; an address with an account adds one row, the link, so the answers take about as long.
+
+**Links.** A link is `<http.public_url>/reset-password#<token>`, valid for `password_reset.link_lifetime` (1 hour) and used once. As with [email verification](#sign-up), the token is in the fragment, and the database stores only its SHA-256 (SEC-07). Checking a link doesn't use it, so email scanners that open links before people do don't either. Earlier links keep working until one of them is used. Links are kept for 24 hours after use or expiry, then deleted by the retention job (#66). The email never contains the display name.
+
+**Completing a reset** checks the link before the password, so only a working link costs a hash, and a password that breaks the rules leaves the link working. Then, in one transaction, it:
+
+- stores the hash of the new password;
+- verifies the address if it wasn't yet (AUTH-02), since the link proves that its owner received it;
+- uses up the link, and every other reset link of the account;
+- revokes all of the account's sign-ins, which closes their browsers' real-time connections, and deletes its pending sign-ins, which were started with the old password;
+- lifts a [block](#sign-in) on sign-in with the address (AUTH-08), so that the owner can sign in at once. A block on codes stays.
+
+It doesn't sign in. The user signs in with the new password, and with MFA on, with a code as well, so a reset never gets past the second factor.
+
+**Abuse (SEC-08).** Without third-party services:
+
+- Requests are counted per network: an IPv4 address, or an IPv6 /64. Past `password_reset.max_per_network` (20) within `password_reset.window` (1 hour), asking answers `429` with `Retry-After` until the window has moved on. At most `password_reset.max_tracked_networks` networks are counted; while that many are, others aren't, and the limit per address still holds.
+- An address gets at most one email per `password_reset.email_interval` (5 minutes), so asking cannot flood an inbox. Requests in between get the same answer, without an email or a link.
+- Like the sign-up limits, the counts are kept in memory by each instance, so with several instances a network can ask that many times more often. Links carry a 256-bit token, which cannot be guessed, so checking and completing need no limit of their own.
+
+**Audit.** Every request records `password_reset_requested` before the answer (AUD-03), by a user actor without an ID, since whoever asked isn't known to be the owner, with the account as the target if the address has one, and `emailed` saying whether an email was sent. A request refused for its network has the reason `network_blocked`. Completing records `password_reset_completed` by the account's owner, `email_verified` if the address wasn't verified yet, and `sign_in_session_revoked` for each sign-in that ends, all with the same correlation ID. Links that don't work and rejected passwords record nothing, as for email verification.
+
+**Still to come.** The email that says the password was reset (AUTH-12, #32).
 
 ## Passwords
 

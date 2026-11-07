@@ -12,3 +12,6 @@ export const DISPLAY_NAME_MAX_LENGTH = 100;
 
 /** `accounts.verification_link_lifetime`, in hours (AUTH-02). */
 export const VERIFICATION_LINK_HOURS = 24;
+
+/** `password_reset.link_lifetime`, in hours (AUTH-07). */
+export const RESET_LINK_HOURS = 1;

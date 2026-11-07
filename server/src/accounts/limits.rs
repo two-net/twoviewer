@@ -1,5 +1,6 @@
-//! Limits per network, kept in memory: how often one network may sign up (AUTH-15), and how often
-//! it may fail to sign in (SEC-08); and how often sign-ups may email one address.
+//! Limits per network, kept in memory: how often one network may sign up (AUTH-15), fail to sign
+//! in (SEC-08) and ask for password resets (SEC-08); and how often sign-ups and password resets
+//! may email one address.
 //!
 //! They are counted by each instance of the server on its own. With several instances behind a
 //! load balancer (CAP-03), a network can do that many times more before it is challenged or
@@ -50,13 +51,17 @@ impl From<IpAddr> for Network {
 pub struct Limits {
     sign_up: config::SignUp,
     sign_in: config::SignIn,
+    password_reset: config::PasswordReset,
     /// Sign-ups per network.
     sign_ups: Windows,
     /// Failed sign-ins per network.
     sign_in_failures: Windows,
-    /// When sign-up last emailed each address, by the SHA-256 of the address, so that the
-    /// addresses themselves aren't kept.
-    notices: Mutex<Counts<[u8; 32], Instant>>,
+    /// Password reset requests per network.
+    reset_requests: Windows,
+    /// When sign-up last emailed each address.
+    sign_up_notices: Notices,
+    /// When password reset last emailed each address.
+    reset_emails: Notices,
 }
 
 /// A map whose expired entries are removed at most once per `interval`.
@@ -167,14 +172,58 @@ impl Windows {
     }
 }
 
+/// When each address was last emailed, by the SHA-256 of the address, so that the addresses
+/// themselves aren't kept, and whether it may be emailed again.
+struct Notices {
+    interval: Duration,
+    last: Mutex<Counts<[u8; 32], Instant>>,
+}
+
+impl Notices {
+    fn new(interval: Duration) -> Self {
+        Self {
+            interval,
+            last: Mutex::new(Counts::new()),
+        }
+    }
+
+    /// Whether `address` may be emailed at `now`, at most once per interval. If it may, the time
+    /// is recorded.
+    fn may_send(&self, address: &EmailAddress, now: Instant) -> bool {
+        let interval = self.interval;
+        let key: [u8; 32] = Sha256::digest(address.as_str().as_bytes()).into();
+        let mut last = self.last.lock().expect("never poisoned");
+        last.prune(now, interval, |at| {
+            now.saturating_duration_since(*at) >= interval
+        });
+        match last.entries.get(&key) {
+            Some(at) if now.saturating_duration_since(*at) < interval => false,
+            _ => {
+                last.entries.insert(key, now);
+                true
+            }
+        }
+    }
+}
+
 impl Limits {
-    pub fn new(sign_up: &config::SignUp, sign_in: &config::SignIn) -> Self {
+    pub fn new(
+        sign_up: &config::SignUp,
+        sign_in: &config::SignIn,
+        password_reset: &config::PasswordReset,
+    ) -> Self {
         Self {
             sign_up: sign_up.clone(),
             sign_in: sign_in.clone(),
+            password_reset: password_reset.clone(),
             sign_ups: Windows::new(sign_up.window, sign_up.max_tracked_networks),
             sign_in_failures: Windows::new(sign_in.failure_window, sign_in.max_tracked_networks),
-            notices: Mutex::new(Counts::new()),
+            reset_requests: Windows::new(
+                password_reset.window,
+                password_reset.max_tracked_networks,
+            ),
+            sign_up_notices: Notices::new(sign_up.notice_interval),
+            reset_emails: Notices::new(password_reset.email_interval),
         }
     }
 
@@ -223,19 +272,34 @@ impl Limits {
     /// The table needs no limit of its own: each entry follows a password hash, which limits how
     /// fast they come (`passwords.max_concurrent_hashes`).
     pub fn may_notify(&self, address: &EmailAddress, now: Instant) -> bool {
-        let interval = self.sign_up.notice_interval;
-        let key: [u8; 32] = Sha256::digest(address.as_str().as_bytes()).into();
-        let mut notices = self.notices.lock().expect("never poisoned");
-        notices.prune(now, interval, |last| {
-            now.saturating_duration_since(*last) >= interval
-        });
-        match notices.entries.get(&key) {
-            Some(last) if now.saturating_duration_since(*last) < interval => false,
-            _ => {
-                notices.entries.insert(key, now);
-                true
-            }
-        }
+        self.sign_up_notices.may_send(address, now)
+    }
+
+    /// Counts a password reset request from `address` at `now`, unless its network has already
+    /// made `password_reset.max_per_network` within `password_reset.window`: then it is refused,
+    /// and a new request is possible after the returned time. While too many networks are counted,
+    /// requests from others aren't: the limit per address ([`Limits::may_email_reset`]) still
+    /// holds.
+    pub fn admit_reset(&self, address: IpAddr, now: Instant) -> Result<(), Duration> {
+        let max = self.password_reset.max_per_network;
+        self.reset_requests
+            .update(Network::from(address), now, |requests| {
+                if requests.len() >= max {
+                    return Err(self.reset_requests.retry_after(requests, now));
+                }
+                requests.push_back(now);
+                Ok(())
+            })
+            .unwrap_or(Ok(()))
+    }
+
+    /// Whether a password reset at `now` may email `address`, at most once per
+    /// `password_reset.email_interval`. If it may, the time is recorded.
+    ///
+    /// Ask only for addresses that have an account, so that the table holds at most one entry per
+    /// account.
+    pub fn may_email_reset(&self, address: &EmailAddress, now: Instant) -> bool {
+        self.reset_emails.may_send(address, now)
     }
 }
 
@@ -252,7 +316,11 @@ mod tests {
             ..config::SignUp::default()
         };
         configure(&mut config);
-        Limits::new(&config, &config::SignIn::default())
+        Limits::new(
+            &config,
+            &config::SignIn::default(),
+            &config::PasswordReset::default(),
+        )
     }
 
     fn ip(address: &str) -> IpAddr {
@@ -336,7 +404,11 @@ mod tests {
             ..config::SignIn::default()
         };
         configure(&mut config);
-        Limits::new(&config::SignUp::default(), &config)
+        Limits::new(
+            &config::SignUp::default(),
+            &config,
+            &config::PasswordReset::default(),
+        )
     }
 
     #[test]
@@ -406,5 +478,83 @@ mod tests {
         assert!(limits.may_notify(&EmailAddress::new("bob@example.com"), start));
         assert!(limits.may_notify(&ann, start + Duration::from_secs(900)));
         assert!(!limits.may_notify(&ann, start + Duration::from_secs(901)));
+    }
+
+    fn reset_limits(configure: impl FnOnce(&mut config::PasswordReset)) -> Limits {
+        let mut config = config::PasswordReset {
+            window: Duration::from_secs(60),
+            max_per_network: 3,
+            max_tracked_networks: 100,
+            email_interval: Duration::from_secs(300),
+            ..config::PasswordReset::default()
+        };
+        configure(&mut config);
+        Limits::new(
+            &config::SignUp::default(),
+            &config::SignIn::default(),
+            &config,
+        )
+    }
+
+    #[test]
+    fn a_network_is_refused_password_resets_past_the_maximum_until_the_window_moves_on() {
+        let limits = reset_limits(|_| {});
+        let start = Instant::now();
+        let at = |seconds| start + Duration::from_secs(seconds);
+        let address = ip("203.0.113.7");
+
+        assert_eq!(limits.admit_reset(address, at(0)), Ok(()));
+        assert_eq!(limits.admit_reset(address, at(10)), Ok(()));
+        assert_eq!(limits.admit_reset(address, at(20)), Ok(()));
+        assert_eq!(
+            limits.admit_reset(address, at(30)),
+            Err(Duration::from_secs(30))
+        );
+        // Refused requests don't count.
+        assert_eq!(
+            limits.admit_reset(address, at(40)),
+            Err(Duration::from_secs(20))
+        );
+        // Other networks are counted on their own.
+        assert_eq!(limits.admit_reset(ip("203.0.113.8"), at(40)), Ok(()));
+        // The first request has left the window.
+        assert_eq!(limits.admit_reset(address, at(60)), Ok(()));
+    }
+
+    #[test]
+    fn password_resets_count_by_slash_64() {
+        let limits = reset_limits(|config| config.max_per_network = 1);
+        let now = Instant::now();
+
+        assert_eq!(limits.admit_reset(ip("2001:db8:1:2::1"), now), Ok(()));
+        assert!(limits.admit_reset(ip("2001:db8:1:2:ffff::9"), now).is_err());
+        assert_eq!(limits.admit_reset(ip("2001:db8:1:3::1"), now), Ok(()));
+    }
+
+    #[test]
+    fn password_resets_beyond_the_tracked_networks_are_not_counted() {
+        let limits = reset_limits(|config| {
+            config.max_tracked_networks = 1;
+            config.max_per_network = 1;
+        });
+        let now = Instant::now();
+
+        assert_eq!(limits.admit_reset(ip("192.0.2.1"), now), Ok(()));
+        assert!(limits.admit_reset(ip("192.0.2.1"), now).is_err());
+        assert_eq!(limits.admit_reset(ip("192.0.2.2"), now), Ok(()));
+        assert_eq!(limits.admit_reset(ip("192.0.2.2"), now), Ok(()));
+    }
+
+    #[test]
+    fn an_address_gets_a_reset_email_once_per_interval_apart_from_sign_up() {
+        let limits = reset_limits(|_| {});
+        let start = Instant::now();
+        let ann = EmailAddress::new("ann@example.com");
+
+        assert!(limits.may_email_reset(&ann, start));
+        assert!(!limits.may_email_reset(&ann, start + Duration::from_secs(299)));
+        // Sign-up's emails are counted on their own.
+        assert!(limits.may_notify(&ann, start));
+        assert!(limits.may_email_reset(&ann, start + Duration::from_secs(300)));
     }
 }

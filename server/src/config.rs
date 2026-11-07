@@ -49,6 +49,7 @@ pub struct Config {
     pub sign_up: SignUp,
     pub sign_in: SignIn,
     pub mfa: Mfa,
+    pub password_reset: PasswordReset,
     pub log: Log,
 }
 
@@ -320,6 +321,31 @@ pub struct Mfa {
     pub clock_skew_steps: u32,
 }
 
+/// Password reset by email (AUTH-07), and its protection against abuse (SEC-08).
+///
+/// Requests are counted per network, one IPv4 address or one IPv6 /64, and reset emails per
+/// address, both in memory by each instance of the server, like sign-ups.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PasswordReset {
+    /// How long a reset link works (AUTH-07).
+    #[serde(with = "humantime_serde")]
+    pub link_lifetime: Duration,
+    /// The time over which reset requests from one network are counted.
+    #[serde(with = "humantime_serde")]
+    pub window: Duration,
+    /// How many reset requests one network may make within `window`. Further ones are refused
+    /// until the window has moved on.
+    pub max_per_network: usize,
+    /// How many networks are counted at once, so that counting takes bounded memory. While that
+    /// many are, requests from other networks aren't counted: the limit per address still holds.
+    pub max_tracked_networks: usize,
+    /// The least time between two reset emails to one address, so that reset requests cannot be
+    /// used to flood someone's inbox.
+    #[serde(with = "humantime_serde")]
+    pub email_interval: Duration,
+}
+
 /// Operational logs (MNT-03), written to standard output.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -473,6 +499,18 @@ impl Default for Mfa {
     }
 }
 
+impl Default for PasswordReset {
+    fn default() -> Self {
+        Self {
+            link_lifetime: Duration::from_secs(60 * 60),
+            window: Duration::from_secs(60 * 60),
+            max_per_network: 20,
+            max_tracked_networks: 100_000,
+            email_interval: Duration::from_secs(5 * 60),
+        }
+    }
+}
+
 /// About 131,000 hashes on average. The web client computes about 190,000 per second with
 /// WebCrypto on a recent laptop, so this takes a second or two on most.
 const DEFAULT_CHALLENGE_DIFFICULTY: u32 = 17;
@@ -616,6 +654,15 @@ impl Config {
             ("mfa.failure_window", self.mfa.failure_window),
             ("mfa.block_duration", self.mfa.block_duration),
             ("mfa.sign_in_step_timeout", self.mfa.sign_in_step_timeout),
+            (
+                "password_reset.link_lifetime",
+                self.password_reset.link_lifetime,
+            ),
+            ("password_reset.window", self.password_reset.window),
+            (
+                "password_reset.email_interval",
+                self.password_reset.email_interval,
+            ),
         ] {
             if value < Duration::from_millis(1) {
                 return Err(ConfigError::TooShort { key });
@@ -657,6 +704,14 @@ impl Config {
                 self.sign_in.max_tracked_networks,
             ),
             ("mfa.max_failures", self.mfa.max_failures),
+            (
+                "password_reset.max_per_network",
+                self.password_reset.max_per_network,
+            ),
+            (
+                "password_reset.max_tracked_networks",
+                self.password_reset.max_tracked_networks,
+            ),
         ] {
             if value == 0 {
                 return Err(ConfigError::TooSmall { key });
@@ -1349,6 +1404,51 @@ mod tests {
 
             assert_eq!(Config::load().unwrap().mfa.clock_skew_steps, 0);
         });
+    }
+
+    #[test]
+    fn password_reset_limits_and_timeouts_must_be_positive() {
+        for (variable, key) in [
+            (
+                "TWOVIEWER_PASSWORD_RESET__MAX_PER_NETWORK",
+                "password_reset.max_per_network",
+            ),
+            (
+                "TWOVIEWER_PASSWORD_RESET__MAX_TRACKED_NETWORKS",
+                "password_reset.max_tracked_networks",
+            ),
+        ] {
+            jail(|jail| {
+                set_required(jail);
+                jail.set_env(variable, "0");
+
+                assert!(
+                    matches!(Config::load(), Err(ConfigError::TooSmall { key: k }) if k == key),
+                    "{variable}"
+                );
+            });
+        }
+        for (variable, key) in [
+            (
+                "TWOVIEWER_PASSWORD_RESET__LINK_LIFETIME",
+                "password_reset.link_lifetime",
+            ),
+            ("TWOVIEWER_PASSWORD_RESET__WINDOW", "password_reset.window"),
+            (
+                "TWOVIEWER_PASSWORD_RESET__EMAIL_INTERVAL",
+                "password_reset.email_interval",
+            ),
+        ] {
+            jail(|jail| {
+                set_required(jail);
+                jail.set_env(variable, "0s");
+
+                assert!(
+                    matches!(Config::load(), Err(ConfigError::TooShort { key: k }) if k == key),
+                    "{variable}"
+                );
+            });
+        }
     }
 
     #[test]

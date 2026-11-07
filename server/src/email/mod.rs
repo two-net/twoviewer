@@ -37,6 +37,7 @@ mod account_exists;
 mod mailer;
 mod message;
 pub mod palette;
+mod reset_password;
 mod sign_in_blocked;
 mod test_email;
 mod verify_email;
@@ -44,6 +45,7 @@ mod verify_email;
 pub use account_exists::AccountExists;
 pub use mailer::{Mailer, SendError, SetupError};
 pub use message::{Content, Email};
+pub use reset_password::ResetPassword;
 pub use sign_in_blocked::SignInBlocked;
 pub use test_email::TestEmail;
 pub use verify_email::VerifyEmail;
@@ -75,6 +77,12 @@ mod tests {
                 failures: 10,
                 blocked_for: Duration::from_secs(15 * 60),
                 reset_url: "https://twoviewer.example/reset-password",
+            }
+            .render()
+            .unwrap(),
+            ResetPassword {
+                link: "https://twoviewer.example/reset-password#0123",
+                valid_for: Duration::from_secs(60 * 60),
             }
             .render()
             .unwrap(),
