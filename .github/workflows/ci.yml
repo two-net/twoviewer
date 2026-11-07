@@ -72,6 +72,12 @@ jobs:
         run: |
           ! grep -nP '\b(src|href)\s*=\s*"(https?:)?//|url\(\s*["\x27]?(https?:)?//' \
             dist/twoviewer-web/browser/index.html dist/twoviewer-web/browser/*.css
+      # Components use the color tokens in src/styles.scss, so that they work in both themes
+      # (THM-06).
+      - name: No fixed colors in components
+        run: |
+          ! grep -rnP --include='*.scss' \
+            '^(?!\s*//).*(#[0-9a-fA-F]{3,8}\b|\b(rgba?|hsla?|hwb|lab|lch|oklab|oklch)\()' src/app
       - run: npm test -- --watch=false
       # All user-facing text can be translated later (A11Y-04).
       - name: Template text is marked for translation

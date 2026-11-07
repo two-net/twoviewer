@@ -2,9 +2,11 @@
 // inputs. Components use the tokens, never fixed colors, so that they work in both themes
 // (THM-06).
 //
-// `light-dark()` picks the value for the resolved theme. It follows the operating system's
-// color scheme until the theme option (#18) sets `color-scheme` on `<html>`. The colors are
-// provisional until the palettes are designed (OI-6, #19).
+// `light-dark()` picks the value for the resolved theme. With the System option, `color-scheme`
+// is `light dark` and follows the operating system's or browser's preference as it changes
+// (THM-02). The Light and Dark options set `data-theme` on `<html>` (`Theme`, and `theme.js` before
+// the first paint), which fixes it. The colors are provisional until the palettes are designed
+// (OI-6, #19).
 
 :root {
   color-scheme: light dark;
@@ -46,6 +48,25 @@
     sans-serif;
   line-height: 1.5;
   text-size-adjust: 100%;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+// Changing the theme cross-fades the whole page in at most 200 ms (THM-03). `Theme` adds the
+// class only for that change, and not with reduced motion.
+:root.theme-change::view-transition-group(root) {
+  animation-duration: 150ms;
+}
+
+// No animation may block input (ANI-02): clicks reach the page during the cross-fade.
+:root.theme-change::view-transition {
+  pointer-events: none;
 }
 
 *,

@@ -48,7 +48,7 @@ ng test
 
 [`src/app/app.routes.ts`](src/app/app.routes.ts) has a route for every screen in §4.1 of the SRS. Each screen is in the folder of its feature (`accounts/`, `devices/`, `sessions/`, `vpn/`, `audit/`, `settings/`, `operations/`, `legal/`, `errors/`), and its code is downloaded when it is first opened. A screen sits in one of two layouts:
 
-- `layout/app-layout`: the signed-in screens, with the main navigation. Below 48rem wide, the navigation opens from a *Menu* button.
+- `layout/app-layout`: the signed-in screens, with the main navigation and the *Account* menu (`layout/account-menu`), which has the theme and a link to Settings. Below 48rem wide, the navigation opens from a *Menu* button.
 - `layout/plain-layout`: the visitor screens, the host page, the policies and the error pages, with the logo and product name only.
 
 The remote session view has no layout and fills the window. The root component, [`src/app/app.html`](src/app/app.html), adds what every page has: a skip link, the footer with the Terms of Service and Privacy Notice (PRIV-04), the toasts and the confirmation dialog. `/terms` and `/privacy` are placeholders until the texts are written.
@@ -67,8 +67,10 @@ In [`src/app/shared/`](src/app/shared):
 | `Toasts.show(message)` | Confirming that a background action has finished (UI-08). A toast disappears after 5 seconds and pauses while hovered or focused. The 5 seconds is a constant, not a server setting (MNT-01), until the web client gets settings from the server. |
 | `localeDate`, `localeNumber` pipes | Dates, times and numbers ([below](#dates-times-and-numbers)). |
 | `ServerConnection` | The real-time connection to the server (IF-09, [below](#real-time-updates)). |
+| `Theme`, `<app-theme-picker>` | The theme option, and the radio buttons that choose it ([below](#theme)). |
+| `REDUCED_MOTION` | Whether motion should be reduced right now (ANI-04). Skip or shorten animations when it returns `true`. |
 
-Style with the color tokens in [`src/styles.scss`](src/styles.scss) (`var(--color-text)` and so on), never fixed colors, so that every component works in both themes (THM-06). The colors are provisional until the palettes are designed (#19).
+Style with the color tokens in [`src/styles.scss`](src/styles.scss) (`var(--color-text)` and so on), never fixed colors, so that every component works in both themes (THM-06). CI fails on hex colors and color functions in component styles. The colors are provisional until the palettes are designed (#19).
 
 ## Real-time updates
 
@@ -90,6 +92,19 @@ In specs, `provideFakeSockets()` from `shared/connection/testing.ts` replaces th
 ## Name and logo
 
 Both layouts start with the logo and the product name, which link to the home screen (UI-01). The remote session view has no header, and shows them in the browser tab. The logo, [`public/logo.svg`](public/logo.svg), and the icons beside it (`favicon.ico` and `apple-touch-icon.png`) are made from [`brand/logo.svg`](../brand/logo.svg) by `cargo xtask icons`, so don't edit them here. [`brand/README.md`](../brand/README.md) has the rules for the name and the logo.
+
+## Theme
+
+The theme option is Light, Dark or System, and System is the default (THM-01). Every color token is a `light-dark()` pair, so the page follows `color-scheme` on `<html>`:
+
+- With System, `color-scheme` is `light dark`, and the browser switches the colors, native controls and scrollbars whenever the system's preference changes, without any code (THM-02).
+- Light and Dark set `data-theme="light"` or `"dark"` on `<html>`, which fixes `color-scheme`.
+
+`Theme` (in `src/app/shared/theme/`) holds the option. `Theme.choose()` applies it at once with a cross-fade of 150 ms, a view transition that doesn't block clicks, or without one when motion is reduced (THM-03). It remembers the option in this browser's `localStorage`, so that the pages before sign-in use it (THM-04), and other open tabs follow. `<app-theme-picker>` is the choice as radio buttons, in Settings → Appearance and in the *Account* menu (THM-08).
+
+[`public/theme.js`](public/theme.js) applies the remembered option before the first paint, so that no frame, including the splash screen, shows the other theme (THM-05). `index.html` loads it in `<head>` without `async` or `defer`, so that it runs before the page is drawn. Keep it a small file: the Content Security Policy blocks inline scripts. It reads the same `localStorage` key as `Theme`, and a spec runs it to check that. Its name has no content hash, so once the server serves the web client, it must be served so that browsers check for a newer version.
+
+Saving the option in the user's preferences, and applying it in every browser after sign-in (THM-04), comes with sign-in. The comment on `Theme.choose()` says where.
 
 ## Text and translation
 

@@ -1,0 +1,15 @@
+<button
+  #button
+  type="button"
+  class="button"
+  aria-controls="account-menu"
+  [attr.aria-expanded]="open()"
+  (click)="open.set(!open())"
+  i18n="Button that opens the user menu"
+>
+  Account
+</button>
+<div id="account-menu" class="panel" [class.open]="open()">
+  <app-theme-picker />
+  <a class="settings" routerLink="/settings" i18n>Settings</a>
+</div>

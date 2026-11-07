@@ -1,11 +1,14 @@
-// Narrow windows: the navigation is a list below the bar, opened with the menu button.
+// Narrow windows: the navigation is a list below the bar, opened with the menu button. The menu
+// and account buttons share the bar.
 .menu-button {
   margin-left: auto;
+  padding-inline: var(--space-3);
 }
 
 .nav {
   display: none;
   flex-basis: 100%;
+  order: 1;
 
   &.open {
     display: block;
@@ -42,6 +45,7 @@ a {
   .nav {
     display: block;
     flex-basis: auto;
+    order: 0;
     margin-left: auto;
   }
 

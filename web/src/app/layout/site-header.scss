@@ -7,7 +7,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2) var(--space-4);
+  // Narrow, so that the logo, the name and two buttons fit in a 360 px window (UI-07).
+  gap: var(--space-2);
   max-width: var(--content-width);
   min-height: 3.5rem;
   margin-inline: auto;

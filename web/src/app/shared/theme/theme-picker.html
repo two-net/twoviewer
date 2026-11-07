@@ -1,0 +1,33 @@
+<fieldset>
+  <legend i18n>Theme</legend>
+  <label>
+    <input
+      type="radio"
+      [name]="name"
+      value="light"
+      [checked]="theme.option() === 'light'"
+      (change)="theme.choose('light')"
+    />
+    <span i18n="Theme option">Light</span>
+  </label>
+  <label>
+    <input
+      type="radio"
+      [name]="name"
+      value="dark"
+      [checked]="theme.option() === 'dark'"
+      (change)="theme.choose('dark')"
+    />
+    <span i18n="Theme option">Dark</span>
+  </label>
+  <label>
+    <input
+      type="radio"
+      [name]="name"
+      value="system"
+      [checked]="theme.option() === 'system'"
+      (change)="theme.choose('system')"
+    />
+    <span i18n="Theme option, which follows the operating system or browser">System</span>
+  </label>
+</fieldset>
