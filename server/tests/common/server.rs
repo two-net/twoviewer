@@ -111,6 +111,7 @@ pub async fn start(url: &str, configure: impl FnOnce(&mut Config)) -> Server {
     config.email.smtp_host = Some("localhost".to_owned());
     config.email.smtp_port = free_address().port();
     config.email.smtp_security = SmtpSecurity::None;
+    config.http.public_url = Some("https://twoviewer.test".to_owned());
     configure(&mut config);
     let https = config.http.listen;
     let secrets = Secrets {
@@ -175,6 +176,28 @@ impl Server {
             assert!(Instant::now() < deadline, "{name} never read {value}");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+
+    /// The status and body of a request with `body` as JSON to `path` on the HTTPS listener.
+    pub async fn post_json(&self, path: &str, body: &str) -> (u16, String) {
+        let tcp = TcpStream::connect(self.https).await.unwrap();
+        let mut tls = TlsConnector::from(client_tls())
+            .connect("localhost".try_into().unwrap(), tcp)
+            .await
+            .unwrap();
+        let request = format!(
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        tls.write_all(request.as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        // The server closes the connection without a TLS close_notify, which rustls reports.
+        let _ = tls.read_to_end(&mut response).await;
+        let response = String::from_utf8(response).unwrap();
+        let (head, body) = response.split_once("\r\n\r\n").unwrap();
+        let status = head.split(' ').nth(1).unwrap().parse().unwrap();
+        (status, body.to_owned())
     }
 
     /// The origin of the pages this server serves.

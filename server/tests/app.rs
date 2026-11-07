@@ -106,6 +106,35 @@ async fn failed_migrations_stop_the_server() {
     );
 }
 
+/// The account endpoints are served, with the client's address, which audit events need.
+#[tokio::test]
+async fn the_api_is_served() {
+    let (_postgres, url) = postgres().await;
+    let server = start(&url, |_| {}).await;
+    server.wait_for("/readyz", 200).await;
+
+    let (status, body) = server.post_json("/api/sign-up", r#"{"email":""}"#).await;
+    assert_eq!((status, body.as_str()), (400, r#"{"error":"malformed"}"#));
+
+    let invalid = r#"{"email":"ann","displayName":"Ann","password":"short",
+                      "termsVersion":"","privacyVersion":""}"#;
+    let (status, body) = server.post_json("/api/sign-up", invalid).await;
+    assert_eq!(status, 422, "{body}");
+    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["error"], "invalid");
+
+    // Valid apart from the token, so the request gets as far as the database.
+    let (status, body) = server
+        .post_json("/api/verify-email", r#"{"token":"0123"}"#)
+        .await;
+    assert_eq!(
+        (status, body.as_str()),
+        (410, r#"{"error":"link_expired"}"#)
+    );
+
+    server.shut_down().await.unwrap();
+}
+
 #[tokio::test]
 async fn shutdown_while_waiting_for_migrations_stops_promptly() {
     let (_postgres, url) = postgres().await;

@@ -13,6 +13,7 @@ futures-util.workspace = true
 humantime-serde.workspace = true
 lettre.workspace = true
 prometheus-client.workspace = true
+rand.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
 # No `schema-sync` here: the server only changes the schema through migrations (DB-03).

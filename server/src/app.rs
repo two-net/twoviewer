@@ -16,12 +16,13 @@
 
 use std::{future::Future, io, net::SocketAddr, pin::pin, sync::Arc};
 
-use axum::serve::Listener as _;
+use axum::serve::{Listener as _, ListenerExt as _};
 use sea_orm::{DatabaseConnection, DbErr};
 use tokio::{net::TcpListener, sync::oneshot};
 use tracing::{info, warn};
 
 use crate::{
+    accounts::{Accounts, password::Passwords},
     config::{Config, Secrets},
     db::{self, migrate::MigrationError},
     email::{self, Mailer},
@@ -45,6 +46,10 @@ pub enum RunError {
     Tls(#[from] TlsError),
     #[error("cannot set up email: {0}")]
     Email(#[from] email::SetupError),
+    #[error(transparent)]
+    Config(#[from] crate::config::ConfigError),
+    #[error("cannot set up password hashing: {0}")]
+    Passwords(argon2::Error),
     #[error("cannot listen on {address}: {source}")]
     Listen {
         address: SocketAddr,
@@ -89,13 +94,14 @@ async fn serve(
     metrics: &Arc<Metrics>,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), RunError> {
-    // First, so that settings that cannot be used stop the server before it migrates. Features
-    // send emails through `mailer` (#24).
+    // First, so that settings that cannot be used stop the server before it migrates.
     let mailer = Mailer::new(
         &config.email,
         secrets.smtp_credentials.as_ref(),
         metrics.clone(),
     )?;
+    let passwords = Passwords::new(&config.passwords).map_err(RunError::Passwords)?;
+    let public_url = config.http.public_url()?;
     let certificate = Arc::new(Certificate::load(&config.tls).await?);
     let mut shutdown = Box::pin(shutdown);
     let (db, realtime) = tokio::select! {
@@ -148,9 +154,21 @@ async fn serve(
             let _ = draining.send(());
         }
     };
+    let accounts = Accounts::new(
+        db.clone(),
+        mailer.clone(),
+        passwords,
+        public_url,
+        &config.accounts,
+        &config.sign_up,
+    );
+    let routes = realtime.routes().merge(accounts.routes());
+    // With the address of each connection, which audit events record (`http::ClientOrigin`).
+    // axum provides it for its own listeners, and for others once wrapped with `tap_io`.
     let server = axum::serve(
-        listener,
-        http::router(realtime.routes(), metrics.clone(), config.http.hsts_max_age),
+        listener.tap_io(|_| {}),
+        http::router(routes, metrics.clone(), config.http.hsts_max_age)
+            .into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(signal)
     .into_future();

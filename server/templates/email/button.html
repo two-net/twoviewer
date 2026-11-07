@@ -1,0 +1,15 @@
+{#-
+  A button that links to `url`, for the one thing an email asks the reader to do. Emails import it
+  with `{% import "email/button.html" as button %}` and show it with
+  `{% call button::button(url) %}Label{% endcall %}`. Its colors switch to dark mode like the
+  layout's (THM-11).
+-#}
+{%- macro button(url) -%}
+{%- let accent = crate::email::palette::ACCENT -%}
+{%- let on_accent = crate::email::palette::ON_ACCENT -%}
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 16px;">
+<tr>
+<td class="tv-button" style="border-radius:6px;background-color:{{ accent.light }};"><a class="tv-on-accent" href="{{ url }}" style="display:inline-block;padding:12px 20px;border-radius:6px;font-weight:600;text-decoration:none;color:{{ on_accent.light }};">{{ caller() }}</a></td>
+</tr>
+</table>
+{%- endmacro -%}

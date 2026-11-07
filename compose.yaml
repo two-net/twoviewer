@@ -53,6 +53,9 @@ services:
       # Browsers would otherwise remember to use only HTTPS for localhost, on every port, which
       # breaks plain-HTTP development servers such as `ng serve`.
       TWOVIEWER_HTTP__HSTS_MAX_AGE: 0s
+      # Links in emails lead to the web client, which runs on the development server (`npm start`
+      # in web/) until the server serves it.
+      TWOVIEWER_HTTP__PUBLIC_URL: http://localhost:4200
       # Emails go to Mailpit, unencrypted. `.test` is a domain reserved for testing.
       TWOVIEWER_EMAIL__FROM_ADDRESS: no-reply@twoviewer.test
       TWOVIEWER_EMAIL__SMTP_HOST: mailpit

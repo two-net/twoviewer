@@ -63,7 +63,7 @@ In [`src/app/shared/`](src/app/shared):
 |---|---|
 | `Confirmation.confirm({ title, message, confirmLabel, typeToConfirm? })` | Destructive actions (UI-03). It resolves to `true` if the user confirms. With `typeToConfirm`, such as the account's email address, the user must type it first. |
 | `<app-empty-state>` | A list with nothing in it. Say what the next step is, and link to it with an element marked `actions` (UI-04). |
-| `describeError(error)`, `<app-error-message [error]>` | Errors: what happened and what the user can do, never server messages or status codes (UI-06). Describe the errors a feature expects yourself, and use these for the rest. |
+| `describeError(error)`, `<app-error-message [error]>` | Errors: what happened and what the user can do, never server messages or status codes (UI-06). Describe the errors a feature expects yourself, as a `UserError`, which both take as it is, and use these for the rest. |
 | `Toasts.show(message)` | Confirming that a background action has finished (UI-08). A toast disappears after 5 seconds and pauses while hovered or focused. The 5 seconds is a constant, not a server setting (MNT-01), until the web client gets settings from the server. |
 | `localeDate`, `localeNumber` pipes | Dates, times and numbers ([below](#dates-times-and-numbers)). |
 | `ServerConnection` | The real-time connection to the server (IF-09, [below](#real-time-updates)). |
@@ -90,6 +90,18 @@ In specs, `provideFakeSockets()` from `shared/connection/testing.ts` replaces th
 ### With the development server
 
 `npm start` proxies `/api`, including the WebSocket, to the server on `https://localhost:8443` ([`proxy.conf.json`](proxy.conf.json)), so start the server side first ([`../README.md`](../README.md#running-the-server-side)). The proxy accepts the self-signed certificate, and rewrites the `Origin` of WebSocket handshakes to the server's own, which the server requires. Without the server, the banner shows that the connection is lost.
+
+## The API
+
+Screens call the server's JSON API under `/api` with Angular's `HttpClient` (`provideHttpClient` in `app.config.ts`). Bodies have camelCase keys. An error has a JSON body with a snake_case `error` code, and a `422` lists the fields that break the rules, with why ([`server/src/api.rs`](../server/src/api.rs)). A screen handles the answers it expects, such as showing a `422` next to its fields, and passes the rest to `<app-error-message>`. In specs, `provideHttpClientTesting()` lets the spec answer the requests.
+
+## Accounts
+
+The screens are in `src/app/accounts/`.
+
+- **Sign up** (AUTH-01) checks the fields before sending them, with the server's default rules in `account-rules.ts`. They are constants until the web client gets settings from the server, and the server's answers say which limit a field didn't meet. The page sends the versions of the Terms of Service and Privacy Notice in [`src/app/legal/versions.ts`](src/app/legal/versions.ts): change a version whenever its text changes, together with the server's. The server answers the same whether or not the address is registered (SEC-14), so the page always says to check the email.
+- **Proof of work** (AUTH-15). When a network has signed up often, the server answers `428` with a challenge. `ProofOfWork` solves it in a web worker, `proof-of-work.worker.ts`, so that the page stays responsive, and the page sends the sign-up again with the solution. The worker imports only `proof-of-work-solver.ts`, without Angular, to stay small, and is type-checked with `tsconfig.worker.json`. Specs replace `ProofOfWork`, since jsdom has no workers.
+- **Verify your email address** (AUTH-02) is where the link in the email leads: `/verify-email#<token>`. The token is in the fragment, which browsers never send to a server. The page takes it out of the address bar, then sends it to the server.
 
 ## Name and logo
 

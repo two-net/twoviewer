@@ -1,0 +1,264 @@
+//! The limits on sign-up (AUTH-15): how often one network may sign up, and how often sign-ups
+//! may email one address.
+//!
+//! Both are counted in memory, by each instance of the server on its own. With several instances
+//! behind a load balancer (CAP-03), a network can sign up that many times more often before it is
+//! challenged or refused. Nothing about them is stored, so no IP addresses are kept beyond the
+//! audit events (PRIV-02).
+
+use std::{
+    collections::{HashMap, VecDeque},
+    net::IpAddr,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
+
+use sha2::{Digest, Sha256};
+
+use crate::{config, db::EmailAddress};
+
+/// What a sign-up from a network may do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Admission {
+    /// Go ahead.
+    Free,
+    /// Go ahead with a solved challenge.
+    Challenge,
+    /// Not now: the network has reached `sign_up.max_per_network`. A new sign-up is possible after
+    /// `retry_after`.
+    Refused { retry_after: Duration },
+}
+
+/// A network, as sign-ups are counted: an IPv4 address, or the first 64 bits of an IPv6 address,
+/// since one connection to the internet usually gets a whole /64.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Network {
+    V4(u32),
+    V6(u64),
+}
+
+impl From<IpAddr> for Network {
+    fn from(address: IpAddr) -> Self {
+        match address.to_canonical() {
+            IpAddr::V4(address) => Self::V4(address.to_bits()),
+            IpAddr::V6(address) => Self::V6((address.to_bits() >> 64) as u64),
+        }
+    }
+}
+
+pub struct Limits {
+    config: config::SignUp,
+    networks: Mutex<Counts<Network, VecDeque<Instant>>>,
+    /// When sign-up last emailed each address, by the SHA-256 of the address, so that the
+    /// addresses themselves aren't kept.
+    notices: Mutex<Counts<[u8; 32], Instant>>,
+}
+
+/// A map whose expired entries are removed at most once per `interval`.
+struct Counts<K, V> {
+    entries: HashMap<K, V>,
+    last_pruned: Option<Instant>,
+}
+
+impl<K: Eq + std::hash::Hash, V> Counts<K, V> {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            last_pruned: None,
+        }
+    }
+
+    /// Removes the entries that `expired` says are, unless that was done less than `interval`
+    /// ago.
+    fn prune(&mut self, now: Instant, interval: Duration, expired: impl Fn(&V) -> bool) {
+        if self
+            .last_pruned
+            .is_some_and(|last| now.saturating_duration_since(last) < interval)
+        {
+            return;
+        }
+        self.entries.retain(|_, value| !expired(value));
+        self.last_pruned = Some(now);
+    }
+}
+
+/// How often a full table of networks is searched for room. Searching takes time proportional to
+/// its size, so it isn't done for every sign-up.
+const FULL_PRUNE_INTERVAL: Duration = Duration::from_secs(1);
+
+impl Limits {
+    pub fn new(config: &config::SignUp) -> Self {
+        Self {
+            config: config.clone(),
+            networks: Mutex::new(Counts::new()),
+            notices: Mutex::new(Counts::new()),
+        }
+    }
+
+    /// Counts a sign-up from `address` at `now`, and says what it may do.
+    pub fn admit(&self, address: IpAddr, now: Instant) -> Admission {
+        let window = self.config.window;
+        let expired = |attempts: &VecDeque<Instant>| {
+            attempts
+                .back()
+                .is_none_or(|last| now.saturating_duration_since(*last) >= window)
+        };
+        let network = Network::from(address);
+        let mut networks = self.networks.lock().expect("never poisoned");
+        networks.prune(now, window, expired);
+        if !networks.entries.contains_key(&network)
+            && networks.entries.len() >= self.config.max_tracked_networks
+        {
+            networks.prune(now, FULL_PRUNE_INTERVAL, expired);
+            if networks.entries.len() >= self.config.max_tracked_networks {
+                // Too many networks are signing up to count another one, which is suspicious in
+                // itself.
+                return Admission::Challenge;
+            }
+        }
+
+        let attempts = networks.entries.entry(network).or_default();
+        while attempts
+            .front()
+            .is_some_and(|first| now.saturating_duration_since(*first) >= window)
+        {
+            attempts.pop_front();
+        }
+        if attempts.len() >= self.config.max_per_network {
+            let first = *attempts.front().expect("max_per_network is at least 1");
+            return Admission::Refused {
+                retry_after: window.saturating_sub(now.saturating_duration_since(first)),
+            };
+        }
+        attempts.push_back(now);
+        if attempts.len() > self.config.challenge_after {
+            Admission::Challenge
+        } else {
+            Admission::Free
+        }
+    }
+
+    /// Whether a sign-up at `now` may email `address`, at most once per `sign_up.notice_interval`.
+    /// If it may, the time is recorded.
+    ///
+    /// The table needs no limit of its own: each entry follows a password hash, which limits how
+    /// fast they come (`passwords.max_concurrent_hashes`).
+    pub fn may_notify(&self, address: &EmailAddress, now: Instant) -> bool {
+        let interval = self.config.notice_interval;
+        let key: [u8; 32] = Sha256::digest(address.as_str().as_bytes()).into();
+        let mut notices = self.notices.lock().expect("never poisoned");
+        notices.prune(now, interval, |last| {
+            now.saturating_duration_since(*last) >= interval
+        });
+        match notices.entries.get(&key) {
+            Some(last) if now.saturating_duration_since(*last) < interval => false,
+            _ => {
+                notices.entries.insert(key, now);
+                true
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn limits(configure: impl FnOnce(&mut config::SignUp)) -> Limits {
+        let mut config = config::SignUp {
+            window: Duration::from_secs(60),
+            challenge_after: 2,
+            max_per_network: 4,
+            max_tracked_networks: 100,
+            ..config::SignUp::default()
+        };
+        configure(&mut config);
+        Limits::new(&config)
+    }
+
+    fn ip(address: &str) -> IpAddr {
+        address.parse().unwrap()
+    }
+
+    #[test]
+    fn a_network_is_challenged_then_refused_within_the_window() {
+        let limits = limits(|_| {});
+        let start = Instant::now();
+        let at = |seconds| start + Duration::from_secs(seconds);
+        let address = ip("203.0.113.7");
+
+        assert_eq!(limits.admit(address, at(0)), Admission::Free);
+        assert_eq!(limits.admit(address, at(10)), Admission::Free);
+        assert_eq!(limits.admit(address, at(20)), Admission::Challenge);
+        assert_eq!(limits.admit(address, at(30)), Admission::Challenge);
+        assert_eq!(
+            limits.admit(address, at(40)),
+            Admission::Refused {
+                retry_after: Duration::from_secs(20)
+            }
+        );
+        // Other networks are counted on their own.
+        assert_eq!(limits.admit(ip("203.0.113.8"), at(40)), Admission::Free);
+        // The first sign-up has left the window, so there is room for one more.
+        assert_eq!(limits.admit(address, at(60)), Admission::Challenge);
+        // Once the window has passed, the network starts afresh.
+        assert_eq!(limits.admit(address, at(200)), Admission::Free);
+    }
+
+    #[test]
+    fn challenge_after_zero_challenges_every_sign_up() {
+        let limits = limits(|config| config.challenge_after = 0);
+
+        assert_eq!(
+            limits.admit(ip("203.0.113.7"), Instant::now()),
+            Admission::Challenge
+        );
+    }
+
+    #[test]
+    fn ipv6_addresses_count_by_slash_64() {
+        let limits = limits(|config| config.challenge_after = 1);
+        let now = Instant::now();
+
+        assert_eq!(limits.admit(ip("2001:db8:1:2::1"), now), Admission::Free);
+        assert_eq!(
+            limits.admit(ip("2001:db8:1:2:ffff::9"), now),
+            Admission::Challenge
+        );
+        assert_eq!(limits.admit(ip("2001:db8:1:3::1"), now), Admission::Free);
+        // IPv4 addresses mapped into IPv6 count as IPv4.
+        assert_eq!(limits.admit(ip("192.0.2.1"), now), Admission::Free);
+        assert_eq!(
+            limits.admit(ip("::ffff:192.0.2.1"), now),
+            Admission::Challenge
+        );
+    }
+
+    #[test]
+    fn a_full_table_challenges_new_networks_until_there_is_room() {
+        let limits = limits(|config| config.max_tracked_networks = 2);
+        let start = Instant::now();
+
+        assert_eq!(limits.admit(ip("192.0.2.1"), start), Admission::Free);
+        assert_eq!(limits.admit(ip("192.0.2.2"), start), Admission::Free);
+        assert_eq!(limits.admit(ip("192.0.2.3"), start), Admission::Challenge);
+        // Networks already counted go on as before.
+        assert_eq!(limits.admit(ip("192.0.2.1"), start), Admission::Free);
+
+        let later = start + Duration::from_secs(61);
+        assert_eq!(limits.admit(ip("192.0.2.3"), later), Admission::Free);
+    }
+
+    #[test]
+    fn an_address_is_notified_once_per_interval() {
+        let limits = limits(|config| config.notice_interval = Duration::from_secs(900));
+        let start = Instant::now();
+        let ann = EmailAddress::new("ann@example.com");
+
+        assert!(limits.may_notify(&ann, start));
+        assert!(!limits.may_notify(&ann, start + Duration::from_secs(899)));
+        assert!(limits.may_notify(&EmailAddress::new("bob@example.com"), start));
+        assert!(limits.may_notify(&ann, start + Duration::from_secs(900)));
+        assert!(!limits.may_notify(&ann, start + Duration::from_secs(901)));
+    }
+}

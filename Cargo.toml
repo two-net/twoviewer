@@ -15,7 +15,8 @@ anyhow = "1.0.104"
 argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "getrandom", "password-hash", "zeroize"] }
 # Email templates, checked when the server is compiled.
 askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
-axum = { version = "0.8.9", default-features = false, features = ["http1", "matched-path", "tokio", "ws"] }
+# `json` for the bodies of the API (`server/src/api.rs`).
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "matched-path", "tokio", "ws"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 figment = { version = "0.10.19", features = ["env", "toml"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
@@ -24,7 +25,7 @@ humantime-serde = "1.1.1"
 # operating system's certificate store.
 lettre = { version = "0.11.23", default-features = false, features = ["builder", "pool", "ring", "rustls-platform-verifier", "smtp-transport", "tokio1-rustls"] }
 prometheus-client = "0.25.1"
-# Randomizes reconnection delays (REL-05).
+# Randomizes reconnection delays (REL-05), and makes the tokens of email links.
 rand = "0.10.3"
 rcgen = "0.14.10"
 # Renders the logo for `cargo xtask icons`. It has no text, so no fonts or text shaping.

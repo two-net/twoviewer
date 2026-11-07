@@ -1,3 +1,4 @@
+import { provideHttpClient, withFetch } from '@angular/common/http';
 import { ApplicationConfig, provideBrowserGlobalErrorListeners } from '@angular/core';
 import {
   TitleStrategy,
@@ -13,6 +14,8 @@ import { screenTransition } from './shared/motion/screen-transition';
 export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
+    // The API, under `/api` on the same origin (`server/src/api.rs`).
+    provideHttpClient(withFetch()),
     provideRouter(
       routes,
       withNavigationErrorHandler(showErrorPage),

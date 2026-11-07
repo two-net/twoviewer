@@ -4,6 +4,9 @@
   below it. Each email extends it, fills the `content` block, and has a `subject` field for the
   title. Write the content as plain `<h1>` and `<p>`: their colors come from the layout.
 
+  For a link the reader should follow, use the `button` macro of `button.html`, and give the address
+  as a `tv-link` link below it too, for clients that don't show the button.
+
   Email clients support little HTML and CSS, so the layout is made of tables with inline styles. It
   is legible in light and dark mode (THM-11):
 
@@ -22,6 +25,8 @@
 {%- let fg = crate::email::palette::TEXT %}
 {%- let muted = crate::email::palette::TEXT_MUTED %}
 {%- let border = crate::email::palette::BORDER %}
+{%- let accent = crate::email::palette::ACCENT %}
+{%- let on_accent = crate::email::palette::ON_ACCENT %}
 <html lang="en" dir="ltr">
 <head>
 <meta charset="utf-8">
@@ -35,17 +40,24 @@ body { margin: 0; padding: 0; -webkit-text-size-adjust: 100%; }
 h1 { margin: 0 0 16px; font-size: 22px; line-height: 1.3; font-weight: 600; }
 p { margin: 0 0 16px; }
 p:last-child { margin-bottom: 0; }
+a { overflow-wrap: anywhere; }
 @media (prefers-color-scheme: dark) {
 .tv-bg { background-color: {{ bg.dark }} !important; }
 .tv-surface { background-color: {{ surface.dark }} !important; }
 .tv-text { color: {{ fg.dark }} !important; }
 .tv-text-muted { color: {{ muted.dark }} !important; }
 .tv-border { border-color: {{ border.dark }} !important; }
+.tv-link { color: {{ accent.dark }} !important; }
+.tv-button { background-color: {{ accent.dark }} !important; }
+.tv-on-accent { color: {{ on_accent.dark }} !important; }
 }
 [data-ogsb] .tv-bg { background-color: {{ bg.dark }} !important; }
 [data-ogsb] .tv-surface { background-color: {{ surface.dark }} !important; }
 [data-ogsc] .tv-text { color: {{ fg.dark }} !important; }
 [data-ogsc] .tv-text-muted { color: {{ muted.dark }} !important; }
+[data-ogsc] .tv-link { color: {{ accent.dark }} !important; }
+[data-ogsb] .tv-button { background-color: {{ accent.dark }} !important; }
+[data-ogsc] .tv-on-accent { color: {{ on_accent.dark }} !important; }
 </style>
 </head>
 <body class="tv-bg" style="margin:0;padding:0;background-color:{{ bg.light }};">

@@ -1,1 +1,33 @@
 <h1 i18n>Verify your email address</h1>
+<div role="status">
+  @switch (state()) {
+    @case ('verifying') {
+      <p>
+        <span class="spinner" aria-hidden="true"></span>
+        <span i18n>Verifying your email address…</span>
+      </p>
+    }
+    @case ('verified') {
+      <p i18n>Your email address is verified. You can now pair devices and start sessions.</p>
+      <p><a class="button button-primary" routerLink="/sign-in" i18n>Sign in</a></p>
+    }
+    @case ('expired') {
+      <p i18n>
+        This link has expired or isn't valid. A link works once, for {{ linkHours }} hours. To get a
+        new one, sign up again with the same address.
+      </p>
+      <p><a class="button" routerLink="/sign-up" i18n>Sign up again</a></p>
+    }
+    @case ('missing') {
+      <p i18n>
+        To verify your email address, open the link in the email we sent you when you signed up.
+      </p>
+    }
+  }
+</div>
+@if (state() === 'failed') {
+  <app-error-message [error]="error()" />
+  <p>
+    <button class="button" type="button" (click)="verify()" i18n>Try again</button>
+  </p>
+}

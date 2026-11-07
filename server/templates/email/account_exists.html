@@ -1,0 +1,10 @@
+{% extends "email/layout.html" %}
+{%- import "email/button.html" as button %}
+{%- block content -%}
+{%- let accent = crate::email::palette::ACCENT %}
+<h1>You already have an account</h1>
+<p>Someone, probably you, tried to sign up for TwoViewer with this email address. It already has an account, so no new one was made.</p>
+{% call button::button(sign_in_url) %}Sign in{% endcall %}
+<p>If you don't remember your password, <a class="tv-link" href="{{ reset_url }}" style="color:{{ accent.light }};">reset it</a>.</p>
+<p>If it wasn't you, you can ignore this email. Your account hasn't changed.</p>
+{%- endblock %}

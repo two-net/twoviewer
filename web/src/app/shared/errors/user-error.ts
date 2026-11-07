@@ -7,12 +7,26 @@ export interface UserError {
   readonly action: string;
 }
 
+/** Whether `error` is already described for the user. */
+function isUserError(error: unknown): error is UserError {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    typeof (error as UserError).summary === 'string' &&
+    typeof (error as UserError).action === 'string'
+  );
+}
+
 /**
  * Describes an error for the user, from the browser's connection and the HTTP status alone.
  * Server messages, status codes and stack traces never reach the user. Features describe the
- * errors they expect themselves, and use this for the rest.
+ * errors they expect themselves, as a `UserError`, which this returns as it is, and use this for
+ * the rest.
  */
 export function describeError(error: unknown, online = navigator.onLine): UserError {
+  if (isUserError(error)) {
+    return error;
+  }
   if (!online) {
     return {
       summary: $localize`You're offline.`,

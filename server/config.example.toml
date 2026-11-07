@@ -21,6 +21,10 @@ public_port = 443
 hsts_max_age = "365d"
 # How long shutdown waits for open requests and connections before closing them.
 shutdown_timeout = "30s"
+# The address people reach the web client at, which links in emails point to: https:// and no
+# path (http:// only for localhost). There is no default. Links are never made from the Host header
+# of a request, which whoever sends it chooses.
+# public_url = "https://twoviewer.example"
 
 [tls]
 # The certificate of the HTTPS listener (IF-08), as PEM files: the chain, leaf first, and its
@@ -107,6 +111,37 @@ hash_parallelism = 1
 # How many passwords may be hashed or checked at once. Further ones wait, so hashing takes at most
 # max_concurrent_hashes * hash_memory_kib of memory.
 max_concurrent_hashes = 4
+
+[accounts]
+# User accounts (AUTH-01).
+# How long a link that verifies an email address works (AUTH-02).
+verification_link_lifetime = "24h"
+# The most characters a display name may have.
+display_name_max_length = 100
+
+[sign_up]
+# Protection of sign-up against automated abuse (AUTH-15). Sign-ups are counted per network: one
+# IPv4 address, or one IPv6 /64. Each instance of the server counts on its own, in memory.
+# The time over which sign-ups from one network are counted.
+window = "1h"
+# How many sign-ups one network may make within the window before the browser must solve a
+# proof-of-work challenge, which takes it a second or two. 0 asks for one every time.
+challenge_after = 3
+# How many sign-ups one network may make within the window at all. Further ones are refused until
+# the window has moved on.
+max_per_network = 30
+# How many networks are counted at once, so that counting takes bounded memory. While that many
+# are, sign-ups from other networks need a challenge.
+max_tracked_networks = 100000
+# How hard a challenge is: the number of leading zero bits the browser must find in a SHA-256
+# hash. Each further bit doubles the work. 17 takes a browser a second or two on most laptops. At
+# most 32.
+challenge_difficulty = 17
+# How long the browser has to solve a challenge.
+challenge_lifetime = "10m"
+# The least time between two emails that sign-ups send to one address, so that sign-up cannot be
+# used to flood someone's inbox. Sign-ups in between still get the same answer, but no email.
+notice_interval = "15m"
 
 [log]
 # "json" (one object per line, for log collectors) or "text" (for development).

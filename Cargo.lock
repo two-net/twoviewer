@@ -445,6 +445,8 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "serde_core",
+ "serde_json",
+ "serde_path_to_error",
  "sha1 0.10.7",
  "sync_wrapper",
  "tokio",
@@ -3350,6 +3352,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_path_to_error"
+version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10a9ff822e371bb5403e391ecd83e182e0e77ba7f6fe0160b795797109d1b457"
+dependencies = [
+ "itoa",
+ "serde",
+ "serde_core",
+]
+
+[[package]]
 name = "serde_repr"
 version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4385,6 +4398,7 @@ dependencies = [
  "humantime-serde",
  "lettre",
  "prometheus-client",
+ "rand 0.10.3",
  "rcgen",
  "rustls",
  "sea-orm",

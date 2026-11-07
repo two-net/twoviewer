@@ -20,6 +20,7 @@
 
 use std::{fmt, net::SocketAddr, path::PathBuf, time::Duration};
 
+use axum::http::Uri;
 use figment::{
     Figment,
     providers::{Env, Format, Serialized, Toml},
@@ -43,6 +44,8 @@ pub struct Config {
     pub realtime: Realtime,
     pub email: Email,
     pub passwords: Passwords,
+    pub accounts: Accounts,
+    pub sign_up: SignUp,
     pub log: Log,
 }
 
@@ -66,6 +69,11 @@ pub struct Http {
     /// How long shutdown waits for open requests and connections before closing them.
     #[serde(with = "humantime_serde")]
     pub shutdown_timeout: Duration,
+    /// The address people reach the web client at, such as `https://twoviewer.example`, which
+    /// links in emails point to. There is no default: links are never built from the `Host`
+    /// header of a request, which the client chooses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_url: Option<String>,
 }
 
 /// The certificate of the HTTPS listener (IF-08). It comes from PEM files, or for development
@@ -206,6 +214,48 @@ pub struct Passwords {
     pub max_concurrent_hashes: usize,
 }
 
+/// User accounts (§3.1).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Accounts {
+    /// How long a link that verifies an email address works (AUTH-02).
+    #[serde(with = "humantime_serde")]
+    pub verification_link_lifetime: Duration,
+    /// The most characters a display name may have.
+    pub display_name_max_length: usize,
+}
+
+/// Protection of sign-up against automated abuse (AUTH-15), without third-party services.
+///
+/// Sign-ups are counted per network: one IPv4 address, or one IPv6 /64. Past `challenge_after`
+/// within `window`, the browser must solve a proof-of-work challenge first; past
+/// `max_per_network`, sign-up is refused until the window has moved on. The counts are kept in
+/// memory by each instance of the server.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignUp {
+    /// The time over which sign-ups from one network are counted.
+    #[serde(with = "humantime_serde")]
+    pub window: Duration,
+    /// How many sign-ups one network may make within `window` without a challenge.
+    pub challenge_after: usize,
+    /// How many sign-ups one network may make within `window` at all.
+    pub max_per_network: usize,
+    /// How many networks are counted at once. When that many are, sign-ups from other networks
+    /// need a challenge, so the counts take bounded memory.
+    pub max_tracked_networks: usize,
+    /// How hard a challenge is: the number of leading zero bits the browser must find in a hash.
+    /// Each further bit doubles the work.
+    pub challenge_difficulty: u32,
+    /// How long the browser has to solve a challenge.
+    #[serde(with = "humantime_serde")]
+    pub challenge_lifetime: Duration,
+    /// The least time between two emails that sign-ups send to one address, so that sign-up
+    /// cannot be used to flood someone's inbox.
+    #[serde(with = "humantime_serde")]
+    pub notice_interval: Duration,
+}
+
 /// Operational logs (MNT-03), written to standard output.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -233,6 +283,7 @@ impl Default for Http {
             public_port: 443,
             hsts_max_age: Duration::from_secs(365 * 24 * 60 * 60),
             shutdown_timeout: Duration::from_secs(30),
+            public_url: None,
         }
     }
 }
@@ -308,6 +359,37 @@ impl Default for Passwords {
     }
 }
 
+impl Default for Accounts {
+    fn default() -> Self {
+        Self {
+            verification_link_lifetime: Duration::from_secs(24 * 60 * 60),
+            display_name_max_length: 100,
+        }
+    }
+}
+
+impl Default for SignUp {
+    fn default() -> Self {
+        Self {
+            window: Duration::from_secs(60 * 60),
+            challenge_after: 3,
+            max_per_network: 30,
+            max_tracked_networks: 100_000,
+            challenge_difficulty: DEFAULT_CHALLENGE_DIFFICULTY,
+            challenge_lifetime: Duration::from_secs(10 * 60),
+            notice_interval: Duration::from_secs(15 * 60),
+        }
+    }
+}
+
+/// About 131,000 hashes on average. The web client computes about 190,000 per second with
+/// WebCrypto on a recent laptop, so this takes a second or two on most.
+const DEFAULT_CHALLENGE_DIFFICULTY: u32 = 17;
+
+/// The hardest challenge allowed. Each bit doubles the work, and 32 bits would take a browser
+/// hours.
+pub const MAX_CHALLENGE_DIFFICULTY: u32 = 32;
+
 impl Default for Log {
     fn default() -> Self {
         Self {
@@ -342,8 +424,26 @@ pub enum ConfigError {
     EmailServer,
     #[error("invalid configuration: email.from_address is not an email address")]
     FromAddress,
+    #[error(
+        "invalid configuration: set http.public_url, the address of the web client that links in \
+         emails point to, such as https://twoviewer.example"
+    )]
+    PublicUrlMissing,
+    #[error(
+        "invalid configuration: http.public_url must be an https:// address without a path, such \
+         as https://twoviewer.example; http:// is allowed only for localhost"
+    )]
+    PublicUrl,
     #[error("invalid configuration: passwords.max_length must be at least passwords.min_length")]
     PasswordLengths,
+    #[error(
+        "invalid configuration: sign_up.max_per_network must be at least sign_up.challenge_after"
+    )]
+    SignUpLimits,
+    #[error(
+        "invalid configuration: sign_up.challenge_difficulty must be at most {MAX_CHALLENGE_DIFFICULTY}"
+    )]
+    ChallengeDifficulty,
     #[error(
         "invalid configuration: passwords.hash_memory_kib, passwords.hash_iterations and \
          passwords.hash_parallelism are not valid Argon2 parameters: {0}"
@@ -399,6 +499,16 @@ impl Config {
             ),
             ("email.timeout", self.email.timeout),
             ("email.retry_delay", self.email.retry_delay),
+            (
+                "accounts.verification_link_lifetime",
+                self.accounts.verification_link_lifetime,
+            ),
+            ("sign_up.window", self.sign_up.window),
+            (
+                "sign_up.challenge_lifetime",
+                self.sign_up.challenge_lifetime,
+            ),
+            ("sign_up.notice_interval", self.sign_up.notice_interval),
         ] {
             if value < Duration::from_millis(1) {
                 return Err(ConfigError::TooShort { key });
@@ -421,6 +531,15 @@ impl Config {
                 "passwords.max_concurrent_hashes",
                 self.passwords.max_concurrent_hashes,
             ),
+            (
+                "accounts.display_name_max_length",
+                self.accounts.display_name_max_length,
+            ),
+            ("sign_up.max_per_network", self.sign_up.max_per_network),
+            (
+                "sign_up.max_tracked_networks",
+                self.sign_up.max_tracked_networks,
+            ),
         ] {
             if value == 0 {
                 return Err(ConfigError::TooSmall { key });
@@ -439,11 +558,72 @@ impl Config {
             _ => return Err(ConfigError::CertificateSource),
         }
         self.email.server()?;
+        self.http.public_url()?;
         if self.passwords.max_length < self.passwords.min_length {
             return Err(ConfigError::PasswordLengths);
         }
         password::argon2_params(&self.passwords).map_err(ConfigError::PasswordHashing)?;
+        if self.sign_up.max_per_network < self.sign_up.challenge_after {
+            return Err(ConfigError::SignUpLimits);
+        }
+        if self.sign_up.challenge_difficulty > MAX_CHALLENGE_DIFFICULTY {
+            return Err(ConfigError::ChallengeDifficulty);
+        }
         Ok(())
+    }
+}
+
+impl Http {
+    /// The address of the web client, which has no default.
+    pub fn public_url(&self) -> Result<PublicUrl, ConfigError> {
+        PublicUrl::parse(
+            self.public_url
+                .as_deref()
+                .ok_or(ConfigError::PublicUrlMissing)?,
+        )
+    }
+}
+
+/// The address people reach the web client at: an origin such as `https://twoviewer.example`,
+/// without a path. Links in emails are made from it, never from the `Host` header of a request,
+/// which would let anyone who sends a request choose where the link points.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublicUrl(String);
+
+impl PublicUrl {
+    /// Accepts `https` addresses, and `http` only for `localhost`, as for a development server.
+    pub fn parse(url: &str) -> Result<Self, ConfigError> {
+        let uri: Uri = url.parse().map_err(|_| ConfigError::PublicUrl)?;
+        let (Some(scheme), Some(authority)) = (uri.scheme_str(), uri.authority()) else {
+            return Err(ConfigError::PublicUrl);
+        };
+        let scheme = scheme.to_ascii_lowercase();
+        let host = authority.host().to_ascii_lowercase();
+        let local = matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]");
+        // `Uri` drops a fragment without a word, so look for one in the text.
+        let origin_only = matches!(uri.path(), "" | "/")
+            && uri.query().is_none()
+            && !url.contains('#')
+            && !authority.as_str().contains('@');
+        let secure = scheme == "https" || (scheme == "http" && local);
+        if !origin_only || !secure {
+            return Err(ConfigError::PublicUrl);
+        }
+        let port = authority
+            .port()
+            .map(|port| format!(":{port}"))
+            .unwrap_or_default();
+        Ok(Self(format!("{scheme}://{host}{port}")))
+    }
+
+    /// The address of `path` in the web client. `path` starts with `/`.
+    pub fn join(&self, path: &str) -> String {
+        debug_assert!(path.starts_with('/'), "{path}");
+        format!("{}{path}", self.0)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -569,7 +749,8 @@ mod tests {
         });
     }
 
-    /// Sets the settings without a default: a certificate and the email server.
+    /// Sets the settings without a default: a certificate, the email server and the address of
+    /// the web client.
     fn set_required(jail: &mut Jail) {
         jail.set_env("TWOVIEWER_TLS__SELF_SIGNED", "true");
         set_email_server(jail);
@@ -578,6 +759,17 @@ mod tests {
     fn set_email_server(jail: &mut Jail) {
         jail.set_env("TWOVIEWER_EMAIL__FROM_ADDRESS", "no-reply@twoviewer.test");
         jail.set_env("TWOVIEWER_EMAIL__SMTP_HOST", "smtp.example.com");
+        jail.set_env("TWOVIEWER_HTTP__PUBLIC_URL", "https://twoviewer.example");
+    }
+
+    /// A configuration with every setting that has no default, as `set_required` sets them.
+    fn complete() -> Config {
+        let mut config = Config::default();
+        config.tls.self_signed = true;
+        config.email.from_address = Some("no-reply@twoviewer.test".to_owned());
+        config.email.smtp_host = Some("smtp.example.com".to_owned());
+        config.http.public_url = Some("https://twoviewer.example".to_owned());
+        config
     }
 
     #[test]
@@ -591,6 +783,7 @@ mod tests {
             "private_key_file",
             "from_address",
             "smtp_host",
+            "public_url",
         ] {
             assert!(EXAMPLE.contains(&format!("# {key} = ")), "{key}");
         }
@@ -610,12 +803,8 @@ mod tests {
     fn defaults_apply_without_file_or_environment() {
         jail(|jail| {
             set_required(jail);
-            let mut expected = Config::default();
-            expected.tls.self_signed = true;
-            expected.email.from_address = Some("no-reply@twoviewer.test".to_owned());
-            expected.email.smtp_host = Some("smtp.example.com".to_owned());
 
-            assert_eq!(Config::load().unwrap(), expected);
+            assert_eq!(Config::load().unwrap(), complete());
         });
     }
 
@@ -628,9 +817,7 @@ mod tests {
             (false, true, false, false),
             (true, false, true, false),
         ] {
-            let mut config = Config::default();
-            config.email.from_address = Some("no-reply@twoviewer.test".to_owned());
-            config.email.smtp_host = Some("smtp.example.com".to_owned());
+            let mut config = complete();
             config.tls.certificate_file = certificate.then(|| "tls.crt".into());
             config.tls.private_key_file = key.then(|| "tls.key".into());
             config.tls.self_signed = self_signed;
@@ -832,6 +1019,7 @@ mod tests {
             assert!(matches!(Config::load(), Err(ConfigError::EmailServer)));
 
             jail.set_env("TWOVIEWER_EMAIL__SMTP_HOST", "smtp.example.com");
+            jail.set_env("TWOVIEWER_HTTP__PUBLIC_URL", "https://twoviewer.example");
             let config = Config::load().unwrap();
             let (from, host) = config.email.server().unwrap();
             assert_eq!(from.to_string(), "no-reply@twoviewer.test");
@@ -956,5 +1144,89 @@ mod tests {
                 Err(ConfigError::MissingSecret("SMTP_USERNAME"))
             ));
         });
+    }
+
+    #[test]
+    fn the_web_client_needs_a_public_url() {
+        jail(|jail| {
+            set_required(jail);
+            jail.set_env("TWOVIEWER_HTTP__PUBLIC_URL", "");
+            assert!(matches!(Config::load(), Err(ConfigError::PublicUrl)));
+        });
+        let mut config = complete();
+        config.http.public_url = None;
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::PublicUrlMissing)
+        ));
+    }
+
+    #[test]
+    fn the_public_url_is_an_https_origin() {
+        for (url, origin) in [
+            (
+                "https://twoviewer.example",
+                Some("https://twoviewer.example"),
+            ),
+            (
+                "https://TwoViewer.Example/",
+                Some("https://twoviewer.example"),
+            ),
+            (
+                "https://twoviewer.example:8443",
+                Some("https://twoviewer.example:8443"),
+            ),
+            ("http://localhost:4200", Some("http://localhost:4200")),
+            ("http://127.0.0.1:4200", Some("http://127.0.0.1:4200")),
+            ("http://[::1]:4200", Some("http://[::1]:4200")),
+            // Plain HTTP would expose the links (SEC-01).
+            ("http://twoviewer.example", None),
+            ("ftp://twoviewer.example", None),
+            ("twoviewer.example", None),
+            ("/verify-email", None),
+            ("https://twoviewer.example/app", None),
+            ("https://twoviewer.example/?a=1", None),
+            ("https://twoviewer.example/#top", None),
+            ("https://admin@twoviewer.example", None),
+        ] {
+            assert_eq!(
+                PublicUrl::parse(url).ok().as_ref().map(PublicUrl::as_str),
+                origin,
+                "{url}"
+            );
+        }
+        assert_eq!(
+            PublicUrl::parse("https://twoviewer.example/")
+                .unwrap()
+                .join("/verify-email"),
+            "https://twoviewer.example/verify-email"
+        );
+    }
+
+    #[test]
+    fn sign_up_limits_must_be_consistent() {
+        let mut config = complete();
+        config.sign_up.challenge_after = 31;
+        assert!(matches!(config.validate(), Err(ConfigError::SignUpLimits)));
+
+        let mut config = complete();
+        config.sign_up.challenge_after = 0;
+        assert!(config.validate().is_ok());
+
+        let mut config = complete();
+        config.sign_up.challenge_difficulty = MAX_CHALLENGE_DIFFICULTY + 1;
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::ChallengeDifficulty)
+        ));
+
+        let mut config = complete();
+        config.sign_up.max_tracked_networks = 0;
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::TooSmall {
+                key: "sign_up.max_tracked_networks"
+            })
+        ));
     }
 }

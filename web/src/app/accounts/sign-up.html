@@ -1,1 +1,114 @@
-<h1 i18n>Sign up</h1>
+@if (sentTo(); as address) {
+  <h1 #sentHeading tabindex="-1" i18n>Check your email</h1>
+  <p i18n>
+    If <strong class="address">{{ address }}</strong> is yours, it has an email with a link that
+    verifies it. The link works for {{ linkHours }} hours.
+  </p>
+  <p i18n>
+    No email after a few minutes? Check your spam folder. To get a new link, sign up again with the
+    same address.
+  </p>
+  <p>
+    <button class="button" type="button" (click)="startOver()" i18n>Sign up again</button>
+  </p>
+} @else {
+  <h1 i18n>Sign up</h1>
+  <form #formElement [formGroup]="form" (ngSubmit)="submit()" novalidate class="form">
+    <div class="field">
+      <label for="sign-up-email" i18n>Email address</label>
+      <input
+        id="sign-up-email"
+        class="input"
+        type="email"
+        formControlName="email"
+        autocomplete="email"
+        spellcheck="false"
+        [attr.aria-invalid]="errorFor('email') ? 'true' : null"
+        [attr.aria-describedby]="errorFor('email') ? 'sign-up-email-error' : null"
+      />
+      @if (errorFor('email'); as message) {
+        <p id="sign-up-email-error" class="field-error">{{ message }}</p>
+      }
+    </div>
+
+    <div class="field">
+      <label for="sign-up-name" i18n>Name</label>
+      <p id="sign-up-name-hint" class="hint" i18n>
+        Shown to people you connect to and to you. You can change it later.
+      </p>
+      <input
+        id="sign-up-name"
+        class="input"
+        type="text"
+        formControlName="displayName"
+        autocomplete="name"
+        [attr.aria-invalid]="errorFor('displayName') ? 'true' : null"
+        [attr.aria-describedby]="
+          'sign-up-name-hint' + (errorFor('displayName') ? ' sign-up-name-error' : '')
+        "
+      />
+      @if (errorFor('displayName'); as message) {
+        <p id="sign-up-name-error" class="field-error">{{ message }}</p>
+      }
+    </div>
+
+    <div class="field">
+      <label for="sign-up-password" i18n>Password</label>
+      <p id="sign-up-password-hint" class="hint" i18n>
+        At least {{ minPasswordLength }} characters. A few words you will remember work well.
+      </p>
+      <input
+        id="sign-up-password"
+        class="input"
+        type="password"
+        formControlName="password"
+        autocomplete="new-password"
+        [attr.aria-invalid]="errorFor('password') ? 'true' : null"
+        [attr.aria-describedby]="
+          'sign-up-password-hint' + (errorFor('password') ? ' sign-up-password-error' : '')
+        "
+      />
+      @if (errorFor('password'); as message) {
+        <p id="sign-up-password-error" class="field-error">{{ message }}</p>
+      }
+    </div>
+
+    <div class="field">
+      <div class="checkbox">
+        <input
+          id="sign-up-terms"
+          type="checkbox"
+          formControlName="terms"
+          [attr.aria-invalid]="errorFor('terms') ? 'true' : null"
+          [attr.aria-describedby]="errorFor('terms') ? 'sign-up-terms-error' : null"
+        />
+        <label for="sign-up-terms" i18n>
+          I accept the
+          <a routerLink="/terms" target="_blank">Terms of Service</a> and the
+          <a routerLink="/privacy" target="_blank">Privacy Notice</a> of {{ productName }}.
+        </label>
+      </div>
+      @if (errorFor('terms'); as message) {
+        <p id="sign-up-terms-error" class="field-error">{{ message }}</p>
+      }
+    </div>
+
+    @if (error(); as error) {
+      <app-error-message [error]="error" />
+    }
+
+    <div class="actions">
+      <button class="button button-primary" type="submit" [disabled]="busy()" i18n>Sign up</button>
+      <p class="status" role="status">
+        @if (checking()) {
+          <span class="spinner" aria-hidden="true"></span>
+          <span i18n>Checking that you're not an automated program…</span>
+        } @else if (busy()) {
+          <span class="spinner" aria-hidden="true"></span>
+          <span i18n>Signing up…</span>
+        }
+      </p>
+    </div>
+  </form>
+  <p i18n>Already have an account? <a routerLink="/sign-in">Sign in</a></p>
+}

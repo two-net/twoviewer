@@ -37,6 +37,17 @@ pub const BORDER: Color = Color {
     dark: "#3a3f47",
 };
 
+/// Links, and the background of buttons.
+pub const ACCENT: Color = Color {
+    light: "#1f5fd6",
+    dark: "#7aa7ff",
+};
+/// The text of buttons.
+pub const ON_ACCENT: Color = Color {
+    light: "#ffffff",
+    dark: "#0b1630",
+};
+
 /// The class that switches each color to dark mode, and the property it sets.
 pub const ROLES: &[(&str, &str, Color)] = &[
     ("tv-bg", "background-color", BG),
@@ -44,6 +55,9 @@ pub const ROLES: &[(&str, &str, Color)] = &[
     ("tv-text", "color", TEXT),
     ("tv-text-muted", "color", TEXT_MUTED),
     ("tv-border", "border-color", BORDER),
+    ("tv-link", "color", ACCENT),
+    ("tv-button", "background-color", ACCENT),
+    ("tv-on-accent", "color", ON_ACCENT),
 ];
 
 #[cfg(test)]
@@ -87,6 +101,8 @@ mod tests {
             ("text", TEXT),
             ("text-muted", TEXT_MUTED),
             ("border", BORDER),
+            ("accent", ACCENT),
+            ("on-accent", ON_ACCENT),
         ] {
             let declaration = format!(
                 "--color-{token}: light-dark({}, {});",
@@ -112,6 +128,8 @@ mod tests {
             (TEXT, SURFACE, TEXT_CONTRAST, "the content"),
             (TEXT, BG, TEXT_CONTRAST, "the name next to the logo"),
             (TEXT_MUTED, BG, TEXT_CONTRAST, "the footer"),
+            (ACCENT, SURFACE, TEXT_CONTRAST, "links in the content"),
+            (ON_ACCENT, ACCENT, TEXT_CONTRAST, "the text of buttons"),
             (tile, BG, GRAPHIC_CONTRAST, "the logo"),
         ] {
             for (mode, foreground, background) in [

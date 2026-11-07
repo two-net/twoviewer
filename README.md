@@ -23,7 +23,7 @@ docker compose up --build
 
 This starts PostgreSQL, the server and Mailpit (MNT-07). The server is on <https://localhost:8443>, with a self-signed certificate that the browser warns about; <http://localhost:8080> redirects there. The monitoring listener is on <http://localhost:9090/readyz>. The database keeps its data between runs; `docker compose down --volumes` deletes it.
 
-Mailpit catches every email the server sends, and shows them on <http://localhost:8025>. To see what emails look like, send the test email:
+Mailpit catches every email the server sends, and shows them on <http://localhost:8025>. Their links lead to the web client on <http://localhost:4200> (`http.public_url`), so start it too, to follow them. To see what emails look like, send the test email:
 
 ```sh
 docker compose exec server /usr/local/bin/twoviewer-server send-test-email you@example.com
@@ -38,6 +38,7 @@ TWOVIEWER_LOG__FORMAT=text \
 TWOVIEWER_TLS__SELF_SIGNED=true \
 TWOVIEWER_HTTP__PUBLIC_PORT=8443 \
 TWOVIEWER_HTTP__HSTS_MAX_AGE=0s \
+TWOVIEWER_HTTP__PUBLIC_URL=http://localhost:4200 \
 TWOVIEWER_EMAIL__FROM_ADDRESS=no-reply@twoviewer.test \
 TWOVIEWER_EMAIL__SMTP_HOST=localhost \
 TWOVIEWER_EMAIL__SMTP_PORT=1025 \

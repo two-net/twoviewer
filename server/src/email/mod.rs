@@ -33,11 +33,70 @@
 //! in the database, where tokens are stored only as hashes (SEC-07). The price is that emails
 //! waiting when the server crashes are lost; people ask for the link again.
 
+mod account_exists;
 mod mailer;
 mod message;
 pub mod palette;
 mod test_email;
+mod verify_email;
 
+pub use account_exists::AccountExists;
 pub use mailer::{Mailer, SendError, SetupError};
 pub use message::{Content, Email};
 pub use test_email::TestEmail;
+pub use verify_email::VerifyEmail;
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    /// Every email TwoViewer sends.
+    fn every_email() -> Vec<Content> {
+        vec![
+            TestEmail.render().unwrap(),
+            VerifyEmail {
+                link: "https://twoviewer.example/verify-email#0123",
+                valid_for: Duration::from_secs(24 * 60 * 60),
+                repeated: true,
+            }
+            .render()
+            .unwrap(),
+            AccountExists {
+                sign_in_url: "https://twoviewer.example/sign-in",
+                reset_url: "https://twoviewer.example/reset-password",
+            }
+            .render()
+            .unwrap(),
+        ]
+    }
+
+    /// Every color of every email switches to dark mode (THM-11), and every color of the palette
+    /// is used, so that none is left unchecked.
+    #[test]
+    fn every_color_has_a_dark_mode() {
+        let mut used = Vec::new();
+        for content in every_email() {
+            used.extend(message::dark_mode_classes(&content.html));
+        }
+
+        for (class, _, _) in palette::ROLES {
+            assert!(used.contains(class), "no email uses {class}");
+        }
+    }
+
+    #[test]
+    fn every_email_ends_with_the_warning() {
+        for content in every_email() {
+            assert!(
+                content
+                    .text
+                    .trim_end()
+                    .ends_with("TwoViewer will never contact you to ask for access."),
+                "{}",
+                content.text
+            );
+        }
+    }
+}

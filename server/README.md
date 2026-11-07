@@ -10,6 +10,7 @@ The single server application (§2.2 of the SRS). At startup it applies pending 
 DATABASE_URL=postgres://user:password@localhost/twoviewer \
 TWOVIEWER_TLS__CERTIFICATE_FILE=fullchain.pem \
 TWOVIEWER_TLS__PRIVATE_KEY_FILE=privkey.pem \
+TWOVIEWER_HTTP__PUBLIC_URL=https://twoviewer.example \
 TWOVIEWER_EMAIL__FROM_ADDRESS=no-reply@mail.twoviewer.example \
 TWOVIEWER_EMAIL__SMTP_HOST=smtp.email-service.example \
 SMTP_USERNAME=... SMTP_PASSWORD=... \
@@ -17,6 +18,8 @@ cargo run -p twoviewer-server
 ```
 
 For development, `TWOVIEWER_TLS__SELF_SIGNED=true` replaces the two certificate files ([HTTPS](#https)).
+
+`http.public_url` is where people reach the web client, such as `https://twoviewer.example`: links in emails point there. It has no default, and must be `https://` without a path, or `http://` for `localhost` only. Links are never made from the `Host` header of a request, which whoever sends the request chooses.
 
 ### Configuration
 
@@ -119,6 +122,34 @@ The server sends transactional emails: email verification, password reset, email
 **Light and dark mode.** Emails have an HTML and a plain-text body, and their colors are the web client's. They are legible in clients in light or dark mode (THM-11): `layout.html` says how, and the tests check that every color has a dark counterpart and enough contrast. After changing the layout, look at the test email in Apple Mail, Gmail (web and app) and Outlook.com, in both modes. Mailpit's *HTML Check* tab lists what each client supports.
 
 **Logs.** Each attempt is logged with the email's name, such as `test`, its Message-ID, which the email delivery service's logs show too, the attempt number and the SMTP reply code. Recipients, subjects and content are never logged, because they are personal data and contain single-use links (MNT-03). Neither is the SMTP server's reply text, which can repeat the recipient's address.
+
+## Sign-up
+
+People create an account with an email address, a display name and a password, after accepting the Terms of Service and the Privacy Notice (AUTH-01), and verify the address with an emailed link (AUTH-02). The code is in [`src/accounts/`](src/accounts/mod.rs), and the API's conventions are in [`src/api.rs`](src/api.rs).
+
+| Request | Answers |
+|---|---|
+| `POST /api/sign-up` with `email`, `displayName`, `password`, `termsVersion`, `privacyVersion` and, if asked for, `challenge` | `202`, whether or not the address is registered; `422` with the fields that break the rules; `409` if the terms have changed; `428` with a challenge; `429` |
+| `POST /api/verify-email` with the `token` from the link | `204` once the address is verified; `410` for a link that has expired or doesn't exist |
+
+**Accounts.** Accounts are in `user_account`, with the versions of the Terms of Service and Privacy Notice accepted, which are the dates the texts last changed ([`src/accounts/legal.rs`](src/accounts/legal.rs) and `web/src/app/legal/versions.ts`, which a test keeps the same). Sign-up refuses other versions, so the version recorded is the one the user read. Sign-up and the accepted versions are audited, and so is the verification, with the user's IP address and browser.
+
+**Not revealing who has an account (SEC-14).** Sign-up answers `202` with no body, whether the address is new or not, and hashes the password either way, so that every answer takes about as long. Only the owner of the address learns what happened, from the email:
+
+- A new address gets an account and a link that verifies it.
+- An address with an account that isn't verified yet gets a new link. Signing up again is how people get a new link once theirs has expired. The account keeps the password and display name it was created with: otherwise anyone who knew the address could set the password of an account that its owner then verifies. The email says so.
+- An address with a verified account gets an email that says so, with links to sign in and to reset the password.
+
+**Links.** A link is `<http.public_url>/verify-email#<token>`, valid for `accounts.verification_link_lifetime` (24 hours) and used once. The token is in the fragment, which browsers never send to a server, so it stays out of logs and `Referer` headers. The database stores only the SHA-256 of the token (SEC-07). Opening a used link again still answers `204` while the address is verified, because email scanners often open links before people do. Links are kept for 24 hours after use or expiry, then deleted by the retention job (#66). Emails never contain the display name, so sign-up cannot be used to send text of one's choosing to any address.
+
+**Until the address is verified,** the user can sign in, but cannot pair devices or start sessions (AUTH-02). Those features check `user::Model::is_verified`.
+
+**Abuse (AUTH-15).** Without third-party services:
+
+- Sign-ups are counted per network: an IPv4 address, or an IPv6 /64. Past `sign_up.challenge_after` (3) sign-ups within `sign_up.window` (1 hour), the browser must solve a proof-of-work challenge before its sign-up goes through: find a number that, hashed with SHA-256 together with the challenge, gives `sign_up.challenge_difficulty` leading zero bits. That takes a browser a second or two, without a puzzle for people to solve. Past `sign_up.max_per_network` (30), sign-up answers `429` with `Retry-After` until the window has moved on.
+- Counting takes at most `sign_up.max_tracked_networks` networks. When that many are signing up, the others get a challenge.
+- Sign-ups email one address at most once per `sign_up.notice_interval` (15 minutes), so sign-up cannot flood an inbox. The sign-ups in between get the same answer, without an email.
+- The counts are kept in memory by each instance, so with several instances a network can sign up that many times more often. Challenges are stored in the database (`sign_up_challenge`), so that any instance can check one, and each can be used once.
 
 ## Passwords
 

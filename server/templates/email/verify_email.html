@@ -1,0 +1,16 @@
+{% extends "email/layout.html" %}
+{%- import "email/button.html" as button %}
+{%- block content -%}
+{%- let accent = crate::email::palette::ACCENT %}
+<h1>Verify your email address</h1>
+{% if repeated -%}
+<p>Someone, probably you, signed up for TwoViewer again with this email address. It already has an account, which isn't verified yet. To verify it, use this button:</p>
+{%- else -%}
+<p>To finish signing up for TwoViewer, confirm that this is your email address:</p>
+{%- endif %}
+{% call button::button(link) %}Verify email address{% endcall %}
+<p>The button works once, for {{ validity }} {% if in_hours %}{{ validity|pluralize("hour", "hours") }}{% else %}{{ validity|pluralize("minute", "minutes") }}{% endif %}.
+{%- if repeated %} Then sign in with the password you chose when you first signed up. If you don't remember it, reset your password.{% endif %}</p>
+<p>If the button doesn't work, copy this address into your browser:<br><a class="tv-link" href="{{ link }}" style="color:{{ accent.light }};">{{ link }}</a></p>
+<p>If you didn't sign up for TwoViewer, you can ignore this email.</p>
+{%- endblock %}

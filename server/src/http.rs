@@ -2,20 +2,22 @@
 //!
 //! Every request gets a correlation ID (MNT-03). It is returned in the `x-request-id` header,
 //! carried by every log line written while handling the request, and available to handlers
-//! through the [`CorrelationId`] extractor for the audit events they record. Every answered
-//! request is counted by route and status class (MNT-04).
+//! through the [`CorrelationId`] extractor for the audit events they record. The [`ClientOrigin`]
+//! extractor gives them where the request came from. Every answered request is counted by route
+//! and status class (MNT-04).
 //!
 //! Every response tells browsers to use only HTTPS (SEC-01), and forbids other sites to frame
 //! the web client and scripts from other origins to run in it (SEC-10).
 
 use std::{
+    net::SocketAddr,
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use axum::{
     Router,
-    extract::{FromRequestParts, MatchedPath, Request, State},
+    extract::{ConnectInfo, FromRequestParts, MatchedPath, Request, State},
     http::{HeaderName, HeaderValue, StatusCode, header, request::Parts},
     middleware::{self, Next},
     response::Response,
@@ -23,7 +25,11 @@ use axum::{
 use sea_orm::prelude::Uuid;
 use tracing::{Instrument, info, info_span};
 
-use crate::metrics::{HttpLabels, Metrics, status_class};
+use crate::{
+    audit,
+    metrics::{HttpLabels, Metrics, status_class},
+    user_agent,
+};
 
 /// The response header that carries the correlation ID.
 pub const REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
@@ -31,6 +37,15 @@ pub const REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 /// The ID that ties a request's logs and audit events together.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CorrelationId(pub Uuid);
+
+/// Where a request came from, for its audit events (AUD-02): the client's IP address, and its
+/// browser and operating system.
+///
+/// The IP address is that of the TCP connection. A load balancer in front of the server passes
+/// TCP through rather than terminating TLS (`server/README.md`), so it is the client's. Headers
+/// such as `X-Forwarded-For` are ignored: any client can send them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClientOrigin(pub audit::Origin);
 
 /// What the web client may load and who may frame it (SEC-10):
 ///
@@ -142,6 +157,26 @@ impl<S: Send + Sync> FromRequestParts<S> for CorrelationId {
     }
 }
 
+impl<S: Send + Sync> FromRequestParts<S> for ClientOrigin {
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        // Only missing if the server is not served with connection information.
+        let ConnectInfo(address) = ConnectInfo::<SocketAddr>::from_request_parts(parts, state)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let user_agent = parts
+            .headers
+            .get(header::USER_AGENT)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        Ok(Self(audit::Origin {
+            ip_address: address.ip().to_canonical(),
+            client_description: user_agent::describe(user_agent),
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -245,6 +280,36 @@ mod tests {
         assert_eq!(count(&metrics, "/devices/{id}", "2xx"), 2);
         assert_eq!(count(&metrics, "unmatched", "4xx"), 1);
         assert_eq!(count(&metrics, "/fail", "5xx"), 1);
+    }
+
+    #[tokio::test]
+    async fn the_client_origin_is_the_connection_and_the_user_agent() {
+        use axum::extract::connect_info::MockConnectInfo;
+
+        let router = Router::new()
+            .route(
+                "/",
+                get(|ClientOrigin(origin): ClientOrigin| async move {
+                    format!("{} {}", origin.ip_address, origin.client_description)
+                }),
+            )
+            .layer(MockConnectInfo(SocketAddr::from((
+                [0, 0, 0, 0, 0, 0xffff, 0xc000, 0x0201],
+                443,
+            ))));
+        let request = Request::get("/")
+            .header(
+                header::USER_AGENT,
+                "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+            )
+            .header("x-forwarded-for", "198.51.100.9")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = router.oneshot(request).await.unwrap();
+
+        // An IPv4 address mapped into IPv6 is stored as IPv4.
+        assert_eq!(body(response).await, "192.0.2.1 Firefox on Linux");
     }
 
     #[tokio::test]

@@ -40,4 +40,10 @@ describe('describeError', () => {
       action: 'Try again. If it keeps happening, contact support.',
     });
   });
+
+  it('keeps errors that a feature has described itself', () => {
+    const described = { summary: 'The terms have changed.', action: 'Reload the page.' };
+
+    expect(describeError(described, false)).toBe(described);
+  });
 });

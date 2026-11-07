@@ -1,0 +1,18 @@
+{% extends "email/layout.txt" %}
+{%- block subject %}Verify your email address for TwoViewer{% endblock %}
+{%- block content -%}
+Verify your email address
+
+{% if repeated -%}
+Someone, probably you, signed up for TwoViewer again with this email address. It already has an account, which isn't verified yet. To verify it, open this link:
+{%- else -%}
+To finish signing up for TwoViewer, confirm that this is your email address by opening this link:
+{%- endif %}
+
+{{ link }}
+
+The link works once, for {{ validity }} {% if in_hours %}{{ validity|pluralize("hour", "hours") }}{% else %}{{ validity|pluralize("minute", "minutes") }}{% endif %}.
+{%- if repeated %} Then sign in with the password you chose when you first signed up. If you don't remember it, reset your password.{% endif %}
+
+If you didn't sign up for TwoViewer, you can ignore this email.
+{%- endblock %}

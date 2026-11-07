@@ -22,6 +22,9 @@ pub fn schema_builder() -> SchemaBuilder {
         .builder()
         .register(schema_migration::Entity)
         .register(crate::audit::event::Entity)
+        .register(crate::accounts::user::Entity)
+        .register(crate::accounts::email_link::Entity)
+        .register(crate::accounts::challenge::Entity)
 }
 
 /// Opens the connection pool. Call only after [`migrate::migrate`] has succeeded.

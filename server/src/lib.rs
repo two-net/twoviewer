@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod api;
 pub mod app;
 pub mod audit;
 pub mod config;
@@ -11,3 +12,4 @@ pub mod realtime;
 pub mod redirect;
 pub mod telemetry;
 pub mod tls;
+pub mod user_agent;

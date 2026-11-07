@@ -99,12 +99,61 @@ impl Header for AutoSubmitted {
     }
 }
 
+/// Checks that every color in `html` is one of the palette's, set inline in light mode, on an
+/// element with the class that switches it to dark mode (THM-11), and returns those classes.
+#[cfg(test)]
+pub(super) fn dark_mode_classes(html: &str) -> Vec<&'static str> {
+    use super::palette;
+
+    let (head, body) = html.split_once("</head>").unwrap();
+    assert!(head.contains(r#"<meta name="color-scheme" content="light dark">"#));
+    assert!(head.contains(r#"<meta name="supported-color-schemes" content="light dark">"#));
+    let dark = head
+        .split_once("@media (prefers-color-scheme: dark) {")
+        .expect("a dark mode")
+        .1;
+    let mut used = Vec::new();
+    for tag in body.split('<').skip(1) {
+        let tag = tag.split_once('>').map_or(tag, |(tag, _)| tag);
+        let attribute = |name: &str| {
+            tag.split_once(&format!(r#" {name}=""#))
+                .and_then(|(_, rest)| rest.split_once('"'))
+                .map_or("", |(value, _)| value)
+        };
+        let (style, classes) = (attribute("style"), attribute("class"));
+        let classes: Vec<_> = classes.split(' ').collect();
+        for declaration in style.split(';').filter(|d| d.contains('#')) {
+            let (property, value) = declaration
+                .split_once(':')
+                .unwrap_or_else(|| panic!("{declaration:?} is not a declaration: <{tag}>"));
+            // `border: 1px solid #...` sets the border color.
+            let property = if property == "border" {
+                "border-color"
+            } else {
+                property
+            };
+            let value = &value[value.find('#').unwrap()..][..7];
+            let (class, _, color) = palette::ROLES
+                .iter()
+                .find(|(class, role_property, color)| {
+                    color.light == value && *role_property == property && classes.contains(class)
+                })
+                .unwrap_or_else(|| {
+                    panic!("{property}: {value} needs a palette class for it: <{tag}>")
+                });
+            let rule = format!(".{class} {{ {property}: {} !important; }}", color.dark);
+            assert!(dark.contains(&rule), "no {rule}");
+            used.push(*class);
+        }
+    }
+    used
+}
+
 #[cfg(test)]
 mod tests {
     use askama::Template;
 
     use super::*;
-    use crate::email::palette;
 
     /// An email with a value in it, to check what the templates do with it.
     struct Greeting<'a> {
@@ -198,45 +247,18 @@ mod tests {
         assert!(html.contains(r#"<html lang="en" dir="ltr">"#), "{html}");
     }
 
-    /// Every color in the HTML is one of the palette's, set inline in light mode, on an element
-    /// with the class that switches it to dark mode (THM-11).
     #[test]
     fn every_color_has_a_dark_mode() {
-        let html = greeting("Ann").html;
-        let (head, body) = html.split_once("</head>").unwrap();
+        let used = dark_mode_classes(&greeting("Ann").html);
 
-        assert!(head.contains(r#"<meta name="color-scheme" content="light dark">"#));
-        assert!(head.contains(r#"<meta name="supported-color-schemes" content="light dark">"#));
-        let dark = head
-            .split_once("@media (prefers-color-scheme: dark) {")
-            .expect("a dark mode")
-            .1;
-        let mut used = Vec::new();
-        for tag in body.split('<').skip(1) {
-            let tag = tag.split_once('>').map_or(tag, |(tag, _)| tag);
-            let attribute = |name: &str| {
-                tag.split_once(&format!(r#" {name}=""#))
-                    .and_then(|(_, rest)| rest.split_once('"'))
-                    .map_or("", |(value, _)| value)
-            };
-            let (style, classes) = (attribute("style"), attribute("class"));
-            for (index, _) in style.match_indices('#') {
-                let value = &style[index..index + 7];
-                let (class, property, color) = palette::ROLES
-                    .iter()
-                    .find(|(_, _, color)| color.light == value)
-                    .unwrap_or_else(|| panic!("{value} is not in the palette: <{tag}>"));
-                assert!(
-                    classes.split(' ').any(|c| c == *class),
-                    "{value} needs the class {class}: <{tag}>"
-                );
-                let rule = format!(".{class} {{ {property}: {} !important; }}", color.dark);
-                assert!(dark.contains(&rule), "no {rule}");
-                used.push(*class);
-            }
-        }
-        for (class, _, _) in palette::ROLES {
-            assert!(used.contains(class), "{class} is not used");
+        for class in [
+            "tv-bg",
+            "tv-surface",
+            "tv-text",
+            "tv-text-muted",
+            "tv-border",
+        ] {
+            assert!(used.contains(&class), "the layout doesn't use {class}");
         }
     }
 

@@ -1,6 +1,7 @@
 //! Helpers shared by the integration tests.
 #![allow(dead_code, reason = "each test uses only some of the helpers")]
 
+pub mod mailpit;
 pub mod server;
 
 use std::time::Duration;
