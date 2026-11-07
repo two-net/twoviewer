@@ -17,7 +17,7 @@ use serde_json::{Map, json};
 use super::{
     Accounts, RESET_PASSWORD_PAGE, SIGN_IN_PAGE, VERIFY_EMAIL_PAGE,
     challenge::{self, Solution},
-    email_link::{self, LinkToken, Purpose},
+    email_link::{self, Purpose, Token},
     legal,
     limits::Admission,
     password::{NewPasswordError, Password, Rejected},
@@ -180,12 +180,11 @@ impl Accounts {
     fn validate(&self, request: &Request) -> Result<Form, ApiError> {
         let mut fields = FieldErrors::new();
 
-        let email = request.email.trim();
-        if email.is_empty() {
-            fields.insert("email", FieldError::new("required"));
-        } else if email.chars().count() > MAX_EMAIL_LENGTH || email.parse::<Address>().is_err() {
-            fields.insert("email", FieldError::new("invalid"));
-        }
+        let email = parse_email(&request.email)
+            .inspect_err(|error| {
+                fields.insert("email", *error);
+            })
+            .ok();
 
         let display_name = request.display_name.trim();
         let max = self.config.display_name_max_length;
@@ -204,9 +203,9 @@ impl Accounts {
         if request.terms_version.is_empty() || request.privacy_version.is_empty() {
             fields.insert("terms", FieldError::new("required"));
         }
-        if !fields.is_empty() {
+        let Some(email) = email.filter(|_| fields.is_empty()) else {
             return Err(ApiError::Invalid(fields));
-        }
+        };
         // The user accepted texts that have changed since: they must read the new ones.
         if request.terms_version != legal::TERMS_VERSION
             || request.privacy_version != legal::PRIVACY_VERSION
@@ -217,7 +216,7 @@ impl Accounts {
         }
 
         Ok(Form {
-            email: EmailAddress::new(email),
+            email,
             display_name: display_name.to_owned(),
             password: request.password.clone(),
         })
@@ -255,7 +254,7 @@ impl Accounts {
         &self,
         db: &C,
         user_id: sea_orm::prelude::Uuid,
-    ) -> Result<LinkToken, sea_orm::DbErr> {
+    ) -> Result<Token, sea_orm::DbErr> {
         email_link::create(
             db,
             user_id,
@@ -265,7 +264,7 @@ impl Accounts {
         .await
     }
 
-    fn send_verification(&self, to: &EmailAddress, token: &LinkToken, repeated: bool) {
+    fn send_verification(&self, to: &EmailAddress, token: &Token, repeated: bool) {
         // In the fragment, which browsers never send to a server, so the token doesn't reach
         // server or proxy logs, or other sites in the `Referer` header.
         let link = format!(
@@ -281,6 +280,18 @@ impl Accounts {
                 repeated,
             },
         );
+    }
+}
+
+/// The address typed in `email`, or why it isn't one. Sign-in checks addresses this way too.
+pub(super) fn parse_email(email: &str) -> Result<EmailAddress, FieldError> {
+    let email = email.trim();
+    if email.is_empty() {
+        Err(FieldError::new("required"))
+    } else if email.chars().count() > MAX_EMAIL_LENGTH || email.parse::<Address>().is_err() {
+        Err(FieldError::new("invalid"))
+    } else {
+        Ok(EmailAddress::new(email))
     }
 }
 

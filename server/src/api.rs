@@ -13,6 +13,7 @@
 //! | Status | `error` | When |
 //! |---|---|---|
 //! | 400 | `malformed` | The body is not the JSON the endpoint expects. |
+//! | 401 | `sign_in_failed`, `not_signed_in` | The credentials are wrong, or the request needs a sign-in it doesn't have. |
 //! | 409 | e.g. `terms_changed` | The request is based on something that has changed. |
 //! | 410 | e.g. `link_expired` | What the request refers to is gone or never existed. |
 //! | 422 | `invalid` | Fields don't meet the rules; `fields` says which, and why. |
@@ -37,6 +38,8 @@ use tracing::error;
 pub enum ApiError {
     /// 400: the body is not the JSON the endpoint expects.
     Malformed,
+    /// 401: the credentials are wrong, or the request needs a sign-in it doesn't have.
+    Unauthorized { code: &'static str },
     /// 422: some fields don't meet the rules.
     Invalid(FieldErrors),
     /// 409: the request is based on something that has changed.
@@ -125,6 +128,7 @@ impl IntoResponse for ApiError {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 json!({ "error": "invalid", "fields": fields }),
             ),
+            Self::Unauthorized { code } => (StatusCode::UNAUTHORIZED, json!({ "error": code })),
             Self::Conflict { code } => (StatusCode::CONFLICT, json!({ "error": code })),
             Self::Gone { code } => (StatusCode::GONE, json!({ "error": code })),
             Self::PreconditionRequired { code, mut details } => {
@@ -198,6 +202,13 @@ mod tests {
                         "password": { "code": "too_short", "min": 12 },
                     },
                 }),
+            ),
+            (
+                ApiError::Unauthorized {
+                    code: "sign_in_failed",
+                },
+                StatusCode::UNAUTHORIZED,
+                json!({ "error": "sign_in_failed" }),
             ),
             (
                 ApiError::Conflict {

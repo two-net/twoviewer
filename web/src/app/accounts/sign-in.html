@@ -1,1 +1,51 @@
 <h1 i18n>Sign in</h1>
+<form #formElement [formGroup]="form" (ngSubmit)="submit()" novalidate class="form">
+  <div class="field">
+    <label for="sign-in-email" i18n>Email address</label>
+    <input
+      id="sign-in-email"
+      class="input"
+      type="email"
+      formControlName="email"
+      autocomplete="username"
+      spellcheck="false"
+      [attr.aria-invalid]="errorFor('email') ? 'true' : null"
+      [attr.aria-describedby]="errorFor('email') ? 'sign-in-email-error' : null"
+    />
+    @if (errorFor('email'); as message) {
+      <p id="sign-in-email-error" class="field-error">{{ message }}</p>
+    }
+  </div>
+
+  <div class="field">
+    <label for="sign-in-password" i18n>Password</label>
+    <input
+      id="sign-in-password"
+      class="input"
+      type="password"
+      formControlName="password"
+      autocomplete="current-password"
+      [attr.aria-invalid]="errorFor('password') ? 'true' : null"
+      [attr.aria-describedby]="errorFor('password') ? 'sign-in-password-error' : null"
+    />
+    @if (errorFor('password'); as message) {
+      <p id="sign-in-password-error" class="field-error">{{ message }}</p>
+    }
+  </div>
+
+  @if (error(); as error) {
+    <app-error-message [error]="error" />
+  }
+
+  <div class="actions">
+    <button class="button button-primary" type="submit" [disabled]="busy()" i18n>Sign in</button>
+    <p class="status" role="status">
+      @if (busy()) {
+        <span class="spinner" aria-hidden="true"></span>
+        <span i18n>Signing in…</span>
+      }
+    </p>
+  </div>
+</form>
+<p><a routerLink="/reset-password" i18n>Forgot your password?</a></p>
+<p i18n>New to {{ productName }}? <a routerLink="/sign-up">Sign up</a></p>

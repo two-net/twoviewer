@@ -159,8 +159,8 @@ async fn serve(
         mailer.clone(),
         passwords,
         public_url,
-        &config.accounts,
-        &config.sign_up,
+        config,
+        metrics.clone(),
     );
     let routes = realtime.routes().merge(accounts.routes());
     // With the address of each connection, which audit events record (`http::ClientOrigin`).

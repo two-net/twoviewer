@@ -59,9 +59,9 @@ use self::{hub::Hub, socket::Connection};
 
 /// Who receives an event. A connection receives the events of the topics of its peer.
 ///
-/// Connections are anonymous until sign-in (#25) and Host Agent credentials (#36) exist. Then
-/// topics such as a user or a device are added, and a connection subscribes to the ones its
-/// credential allows.
+/// Connections are anonymous until browser connections check the sign-in (#26, with
+/// [`crate::accounts::Authenticator`]) and Host Agent credentials exist (#36). Then topics such as
+/// a user or a device are added, and a connection subscribes to the ones its credential allows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Topic {

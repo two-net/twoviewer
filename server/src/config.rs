@@ -46,6 +46,7 @@ pub struct Config {
     pub passwords: Passwords,
     pub accounts: Accounts,
     pub sign_up: SignUp,
+    pub sign_in: SignIn,
     pub log: Log,
 }
 
@@ -256,6 +257,36 @@ pub struct SignUp {
     pub notice_interval: Duration,
 }
 
+/// Sign-in (AUTH-05) and its protection against guessing (AUTH-08, SEC-08).
+///
+/// Failed sign-ins are counted per email address, whether or not the address has an account, so
+/// that a block doesn't reveal whether it has one (SEC-14). These counts are in the database, so
+/// they hold across instances and restarts. Failures are also counted per network, one IPv4 address
+/// or one IPv6 /64, in memory by each instance, which slows down guessing across many addresses.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignIn {
+    /// How many failed sign-ins with one email address within `failure_window` block sign-in with
+    /// that address (AUTH-08).
+    pub max_failures: usize,
+    /// The time over which failed sign-ins are counted, per address and per network.
+    #[serde(with = "humantime_serde")]
+    pub failure_window: Duration,
+    /// How long sign-in with an address stays blocked once it has failed `max_failures` times. The
+    /// owner of the account, if there is one, is emailed (AUTH-08).
+    #[serde(with = "humantime_serde")]
+    pub block_duration: Duration,
+    /// How many failed sign-ins one network may make within `failure_window`. Further attempts are
+    /// refused until the window has moved on.
+    pub max_failures_per_network: usize,
+    /// How many networks are counted at once, so that counting takes bounded memory. While that
+    /// many are, failures from other networks aren't counted.
+    pub max_tracked_networks: usize,
+    /// How long a sign-in lasts at most (AUTH-09).
+    #[serde(with = "humantime_serde")]
+    pub session_lifetime: Duration,
+}
+
 /// Operational logs (MNT-03), written to standard output.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -378,6 +409,19 @@ impl Default for SignUp {
             challenge_difficulty: DEFAULT_CHALLENGE_DIFFICULTY,
             challenge_lifetime: Duration::from_secs(10 * 60),
             notice_interval: Duration::from_secs(15 * 60),
+        }
+    }
+}
+
+impl Default for SignIn {
+    fn default() -> Self {
+        Self {
+            max_failures: 10,
+            failure_window: Duration::from_secs(15 * 60),
+            block_duration: Duration::from_secs(15 * 60),
+            max_failures_per_network: 50,
+            max_tracked_networks: 100_000,
+            session_lifetime: Duration::from_secs(30 * 24 * 60 * 60),
         }
     }
 }
@@ -509,6 +553,9 @@ impl Config {
                 self.sign_up.challenge_lifetime,
             ),
             ("sign_up.notice_interval", self.sign_up.notice_interval),
+            ("sign_in.failure_window", self.sign_in.failure_window),
+            ("sign_in.block_duration", self.sign_in.block_duration),
+            ("sign_in.session_lifetime", self.sign_in.session_lifetime),
         ] {
             if value < Duration::from_millis(1) {
                 return Err(ConfigError::TooShort { key });
@@ -539,6 +586,15 @@ impl Config {
             (
                 "sign_up.max_tracked_networks",
                 self.sign_up.max_tracked_networks,
+            ),
+            ("sign_in.max_failures", self.sign_in.max_failures),
+            (
+                "sign_in.max_failures_per_network",
+                self.sign_in.max_failures_per_network,
+            ),
+            (
+                "sign_in.max_tracked_networks",
+                self.sign_in.max_tracked_networks,
             ),
         ] {
             if value == 0 {
@@ -1062,6 +1118,38 @@ mod tests {
                 Config::load(),
                 Err(ConfigError::TooSmall {
                     key: "email.max_attempts"
+                })
+            ));
+        });
+    }
+
+    #[test]
+    fn sign_in_limits_must_be_positive() {
+        for (variable, key) in [
+            ("TWOVIEWER_SIGN_IN__MAX_FAILURES", "sign_in.max_failures"),
+            (
+                "TWOVIEWER_SIGN_IN__MAX_FAILURES_PER_NETWORK",
+                "sign_in.max_failures_per_network",
+            ),
+        ] {
+            jail(|jail| {
+                set_required(jail);
+                jail.set_env(variable, "0");
+
+                assert!(
+                    matches!(Config::load(), Err(ConfigError::TooSmall { key: k }) if k == key),
+                    "{variable}"
+                );
+            });
+        }
+        jail(|jail| {
+            set_required(jail);
+            jail.set_env("TWOVIEWER_SIGN_IN__BLOCK_DURATION", "0s");
+
+            assert!(matches!(
+                Config::load(),
+                Err(ConfigError::TooShort {
+                    key: "sign_in.block_duration"
                 })
             ));
         });

@@ -53,6 +53,12 @@ pub enum Actor {
         id: Uuid,
         origin: Origin,
     },
+    /// Someone not known to be a user, such as at a failed sign-in, where the person trying may
+    /// not be the account's owner. Stored as a user without an ID, which AUD-02 allows ("actor ID,
+    /// if any").
+    Visitor {
+        origin: Origin,
+    },
     /// A remote participant without an account, identified by their Host Agent instance (AUD-11).
     RemoteParticipant {
         agent_instance_id: Uuid,
@@ -143,6 +149,7 @@ pub async fn record<C: ConnectionTrait>(db: &C, event: Event) -> Result<Uuid, Er
 
     let (actor_type, actor_id, origin) = match event.actor {
         Actor::User { id, origin } => (event::ActorType::User, Some(id), Some(origin)),
+        Actor::Visitor { origin } => (event::ActorType::User, None, Some(origin)),
         Actor::RemoteParticipant {
             agent_instance_id,
             origin,

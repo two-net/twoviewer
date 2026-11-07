@@ -1,0 +1,9 @@
+{% extends "email/layout.html" %}
+{%- import "email/button.html" as button %}
+{%- block content -%}
+<h1>Sign-in to your account is paused</h1>
+<p>Someone tried to sign in to your TwoViewer account with the wrong password {% if failures == 1 %}once{% else %}{{ failures }} times{% endif %}. To protect your account, sign-in is paused for {{ duration }} {% if in_hours %}{{ duration|pluralize("hour", "hours") }}{% else %}{{ duration|pluralize("minute", "minutes") }}{% endif %}. After that, you can sign in as usual.</p>
+<p>If it was you and you don't remember your password, reset it:</p>
+{% call button::button(reset_url) %}Reset your password{% endcall %}
+<p>If it wasn't you, someone may be trying to guess your password. Your account is safe as long as they don't know it. If you have used this password anywhere else, reset it now.</p>
+{%- endblock %}

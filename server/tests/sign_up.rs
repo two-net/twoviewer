@@ -87,8 +87,8 @@ async fn app(configure: impl FnOnce(&mut config::Config)) -> App {
         mailer,
         Passwords::new(&config.passwords).unwrap(),
         PublicUrl::parse("https://twoviewer.test").unwrap(),
-        &config.accounts,
-        &config.sign_up,
+        &config,
+        metrics.clone(),
     );
     App {
         router: http::router(accounts.routes(), metrics.clone(), Duration::ZERO),

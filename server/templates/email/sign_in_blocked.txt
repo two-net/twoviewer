@@ -1,0 +1,12 @@
+{% extends "email/layout.txt" %}
+{%- block subject %}Sign-in to your TwoViewer account is paused{% endblock %}
+{%- block content -%}
+Sign-in to your account is paused
+
+Someone tried to sign in to your TwoViewer account with the wrong password {% if failures == 1 %}once{% else %}{{ failures }} times{% endif %}. To protect your account, sign-in is paused for {{ duration }} {% if in_hours %}{{ duration|pluralize("hour", "hours") }}{% else %}{{ duration|pluralize("minute", "minutes") }}{% endif %}. After that, you can sign in as usual.
+
+If it was you and you don't remember your password, reset it:
+{{ reset_url }}
+
+If it wasn't you, someone may be trying to guess your password. Your account is safe as long as they don't know it. If you have used this password anywhere else, reset it now.
+{%- endblock %}

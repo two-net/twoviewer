@@ -89,7 +89,7 @@ Browsers and Host Agents keep a WebSocket open to the HTTPS listener for presenc
 | `/api/realtime` | browsers | with an `Origin` of this host over HTTPS (`https://` + the `Host` header). Browsers send cookies with WebSocket handshakes and apply no CORS check, so this keeps other websites from connecting in a user's name. |
 | `/api/agent/realtime` | Host Agents | without an `Origin`, which browsers always send, so web pages can't pose as agents. |
 
-Others get `403`. Connections are anonymous until sign-in (#25, #26) and Host Agent credentials (#33, #36) exist; those checks go into the same two handlers.
+Others get `403`. Connections are anonymous until browser connections check the sign-in (#26, with `accounts::Authenticator`) and Host Agent credentials exist (#33, #36); those checks go into the same two handlers.
 
 **Messages.** The server sends `hello` first, then a `heartbeat` every `realtime.heartbeat_interval`, which the client answers. A connection that sends nothing for `realtime.heartbeat_timeout` is closed, and clients reconnect when the server is silent that long. With the defaults (3 s and 8 s), a Host Agent that disappears without closing its connection is offline within 10 seconds (DEV-07). A client that sends anything other than a heartbeat, a message above `realtime.max_message_bytes`, or that falls `realtime.send_queue_length` messages behind is disconnected. Clients reconnect after every close, with randomized, increasing delays (REL-05).
 
@@ -150,6 +150,27 @@ People create an account with an email address, a display name and a password, a
 - Counting takes at most `sign_up.max_tracked_networks` networks. When that many are signing up, the others get a challenge.
 - Sign-ups email one address at most once per `sign_up.notice_interval` (15 minutes), so sign-up cannot flood an inbox. The sign-ups in between get the same answer, without an email.
 - The counts are kept in memory by each instance, so with several instances a network can sign up that many times more often. Challenges are stored in the database (`sign_up_challenge`), so that any instance can check one, and each can be used once.
+
+## Sign-in
+
+People sign in with their email address and password (AUTH-05). Failed attempts are throttled per address (AUTH-08) and per network (SEC-08), and no answer reveals whether an address is registered (SEC-14). The code is in [`src/accounts/sign_in.rs`](src/accounts/sign_in.rs) and [`src/throttle.rs`](src/throttle.rs).
+
+| Request | Answers |
+|---|---|
+| `POST /api/sign-in` with `email` and `password` | `204` with the sign-in cookie; `401` (`sign_in_failed`) for a wrong password or an address without an account alike; `422` for empty fields or something that isn't an address; `429` with `Retry-After` while blocked |
+| `GET /api/account` | `200` with the signed-in user's `id`, `email`, `displayName` and `emailVerified`; `401` (`not_signed_in`) without an active sign-in |
+
+**Sign-ins.** Signing in stores a sign-in in `sign_in_session`, with the IP address and browser it came from, and gives the browser its token in the cookie `__Host-twoviewer-session`: `HttpOnly`, so page scripts can't read it, `Secure` and `__Host-`, so it goes over HTTPS only and only this host can set it, and `SameSite=Strict`, so other sites can't make the browser send it (SEC-09). The database stores only the SHA-256 of the token (SEC-07). A sign-in lasts at most `sign_in.session_lifetime` (30 days, AUTH-09). Expiry after inactivity, sign-out, and listing and revoking sign-ins come with #26. Handlers that need a signed-in user take `accounts::SignedIn`. Unverified users can sign in (AUTH-02).
+
+**Not revealing who has an account (SEC-14).** A wrong password and an address without an account get the same `401`, and the password is hashed either way, so the answer takes as long. Blocks work the same way: they are per address, whether or not it has an account.
+
+**Blocks (AUTH-08).** After `sign_in.max_failures` (10) failed sign-ins with one address within `sign_in.failure_window` (15 minutes, a sliding window), sign-in with that address answers `429` for `sign_in.block_duration` (15 minutes), even with the right password, without checking it. Attempts during a block don't count, so a block ends on time however often someone tries. A successful sign-in forgets the failures. When a block starts, the owner of the account, if there is one, gets an email that says so and links to the password reset. The counts are in the `throttle` table, so every instance sees the same counts and a restart doesn't lift a block. They are kept under the SHA-256 of the address, and deleted once their failures have left the window and their block has ended. Anyone can block sign-in with someone else's address for a while by guessing wrong ten times. That is the price of the requirement, and the owner can still reset their password.
+
+**Networks (SEC-08).** Past `sign_in.max_failures_per_network` (50) failed sign-ins within the window, a network (an IPv4 address or an IPv6 /64) gets `429` until the window has moved on, before any password is hashed. This slows down guessing across many addresses, which the limit per address doesn't catch. Like the sign-up limits, it is counted in memory by each instance, for at most `sign_in.max_tracked_networks` networks, and no IP addresses are stored.
+
+**Audit.** Every attempt records `sign_in_succeeded` or `sign_in_failed`, before the answer (AUD-03), with the IP address and browser. Failures are recorded with a user actor without an ID, since whoever tried isn't known to be the owner, and with the account as the target if the address has one. Their reason is `invalid_credentials`, `blocked` or `network_blocked`. The failure that starts a block also records `sign_in_blocked`, with the reason `too_many_failures`. Every failed attempt, refused ones included, counts in `twoviewer_sign_ins_failed_total`.
+
+**Still to come.** The second step for users with MFA (AUTH-05) comes with MFA itself (#27), between the password check and the creation of the sign-in. Suspended accounts can't sign in once suspension exists (OPS-03, #68).
 
 ## Passwords
 

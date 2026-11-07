@@ -11,5 +11,6 @@ pub mod monitoring;
 pub mod realtime;
 pub mod redirect;
 pub mod telemetry;
+pub mod throttle;
 pub mod tls;
 pub mod user_agent;

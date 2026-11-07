@@ -19,6 +19,7 @@ import { firstValueFrom } from 'rxjs';
 import { PRIVACY_VERSION, TERMS_VERSION } from '../legal/versions';
 import { PRODUCT_NAME } from '../product';
 import { ErrorMessage } from '../shared/errors/error-message';
+import { tryAgainAfter } from '../shared/errors/retry-after';
 import { UserError } from '../shared/errors/user-error';
 import { USER_LOCALE } from '../shared/format/user-locale';
 import {
@@ -57,7 +58,7 @@ function notBlank(control: { value: string }): { required: true } | null {
   selector: 'app-sign-up',
   imports: [ReactiveFormsModule, RouterLink, ErrorMessage],
   templateUrl: './sign-up.html',
-  styleUrl: './sign-up.scss',
+  styleUrls: ['./account-form.scss', './sign-up.scss'],
 })
 export class SignUp {
   private readonly http = inject(HttpClient);
@@ -224,25 +225,17 @@ export class SignUp {
         } satisfies UserError);
         return;
       case 429:
-        this.error.set(this.tooMany(response));
+        this.error.set(
+          tryAgainAfter(
+            response,
+            $localize`Too many sign-ups have come from your network.`,
+            this.locale,
+          ),
+        );
         return;
       default:
         this.error.set(error);
     }
-  }
-
-  /** Too many sign-ups from this network: says when to try again, from `Retry-After`. */
-  private tooMany(response: HttpErrorResponse): UserError {
-    const seconds = Number(response.headers.get('Retry-After'));
-    const summary = $localize`Too many sign-ups have come from your network.`;
-    if (!Number.isFinite(seconds) || seconds <= 0) {
-      return { summary, action: $localize`Try again later.` };
-    }
-    const time = new Intl.DateTimeFormat(this.locale.locales, {
-      timeStyle: 'short',
-      timeZone: this.locale.timeZone,
-    }).format(Date.now() + seconds * 1000);
-    return { summary, action: $localize`Try again after ${time}:time:.` };
   }
 
   private focusFirstError(): void {

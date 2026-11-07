@@ -1,0 +1,43 @@
+// The forms of the account pages, such as sign-up and sign-in.
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 28rem;
+  margin-bottom: var(--space-6);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+
+  > label {
+    font-weight: 600;
+  }
+
+  p {
+    margin: 0;
+  }
+}
+
+.hint {
+  color: var(--color-text-muted);
+}
+
+.field-error {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+
+  .status {
+    margin: 0;
+  }
+}

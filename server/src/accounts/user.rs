@@ -33,6 +33,8 @@ pub struct Model {
     pub created_at: DateTimeUtc,
     #[sea_orm(has_many)]
     pub email_links: HasMany<super::email_link::Entity>,
+    #[sea_orm(has_many)]
+    pub sign_in_sessions: HasMany<super::sign_in_session::Entity>,
 }
 
 impl Model {

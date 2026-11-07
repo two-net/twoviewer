@@ -18,6 +18,17 @@
 //! devices or start sessions (AUTH-02). Pairing (#36) and sessions (#42, #43) must refuse users
 //! for whom [`user::Model::is_verified`] is false.
 //!
+//! # Sign-in
+//!
+//! - `POST /api/sign-in` signs in with an email address and a password (AUTH-05). It answers `204`
+//!   with the cookie of a new sign-in, or `401`, the same whether the password is wrong or the
+//!   address has no account (SEC-14), or `422` or `429`. Failed attempts are throttled per address
+//!   (AUTH-08) by [`crate::throttle`], and per network (SEC-08).
+//! - `GET /api/account` answers the signed-in user's account, or `401`.
+//!
+//! [`sign_in::sign_in`] says what it does in detail. Handlers that need a signed-in user take
+//! [`SignedIn`], which reads the cookie ([`signed_in`]).
+//!
 //! # Passwords
 //!
 //! [`password::Passwords`] holds the rules for new passwords (AUTH-03, AUTH-04) and the only way
@@ -49,34 +60,53 @@
 //! }
 //! ```
 //!
+//! [`sign_in::sign_in`] does this.
+//!
 //! Passwords and their hashes are never logged or audited (MNT-03, AUD-06): their `Debug` output
-//! hides them, and they have no `Display`. Neither are the tokens of email links.
+//! hides them, and they have no `Display`. Neither are the [tokens](token) of email links and
+//! sign-ins.
 
+mod account;
 pub mod challenge;
 pub mod compromised;
 pub mod email_link;
 pub mod legal;
 mod limits;
 pub mod password;
+mod sign_in;
+pub mod sign_in_session;
 mod sign_up;
+pub mod signed_in;
+pub mod token;
 pub mod user;
 mod verify_email;
 
 use std::sync::Arc;
 
-use axum::{Router, routing::post};
+use axum::{
+    Router,
+    extract::FromRef,
+    routing::{get, post},
+};
 use sea_orm::DatabaseConnection;
 
+pub use self::signed_in::{Authenticator, SignedIn};
 use self::{limits::Limits, password::Passwords};
 use crate::{
     config::{self, PublicUrl},
     email::Mailer,
+    metrics::Metrics,
+    throttle,
 };
 
 /// The path of sign-up in the API.
 pub const SIGN_UP_PATH: &str = "/api/sign-up";
 /// The path of email verification in the API.
 pub const VERIFY_EMAIL_PATH: &str = "/api/verify-email";
+/// The path of sign-in in the API.
+pub const SIGN_IN_PATH: &str = "/api/sign-in";
+/// The path of the signed-in user's account in the API.
+pub const ACCOUNT_PATH: &str = "/api/account";
 
 /// The pages of the web client that emails link to (`web/src/app/app.routes.ts`).
 const VERIFY_EMAIL_PAGE: &str = "/verify-email";
@@ -92,26 +122,31 @@ pub struct Accounts {
     public_url: PublicUrl,
     config: config::Accounts,
     sign_up: config::SignUp,
+    sign_in: config::SignIn,
     limits: Limits,
+    metrics: Arc<Metrics>,
 }
 
 impl Accounts {
+    /// Uses the `accounts`, `sign_up` and `sign_in` sections of `config`.
     pub fn new(
         db: DatabaseConnection,
         mailer: Mailer,
         passwords: Passwords,
         public_url: PublicUrl,
-        config: &config::Accounts,
-        sign_up: &config::SignUp,
+        config: &config::Config,
+        metrics: Arc<Metrics>,
     ) -> Arc<Self> {
         Arc::new(Self {
             db,
             mailer,
             passwords,
             public_url,
-            config: config.clone(),
-            sign_up: sign_up.clone(),
-            limits: Limits::new(sign_up),
+            config: config.accounts.clone(),
+            sign_up: config.sign_up.clone(),
+            sign_in: config.sign_in.clone(),
+            limits: Limits::new(&config.sign_up, &config.sign_in),
+            metrics,
         })
     }
 
@@ -121,6 +156,23 @@ impl Accounts {
         Router::new()
             .route(SIGN_UP_PATH, post(sign_up::sign_up))
             .route(VERIFY_EMAIL_PATH, post(verify_email::verify_email))
+            .route(SIGN_IN_PATH, post(sign_in::sign_in))
+            .route(ACCOUNT_PATH, get(account::account))
             .with_state(self.clone())
+    }
+
+    /// How failed sign-ins with one address are throttled (AUTH-08).
+    fn sign_in_rule(&self) -> throttle::Rule {
+        throttle::Rule {
+            max_failures: self.sign_in.max_failures,
+            window: self.sign_in.failure_window,
+            block_for: self.sign_in.block_duration,
+        }
+    }
+}
+
+impl FromRef<Arc<Accounts>> for Authenticator {
+    fn from_ref(accounts: &Arc<Accounts>) -> Self {
+        Authenticator::new(accounts.db.clone())
     }
 }

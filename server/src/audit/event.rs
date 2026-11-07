@@ -24,7 +24,8 @@ pub struct Model {
     #[sea_orm(default_expr = "Expr::current_timestamp()")]
     pub occurred_at: DateTimeUtc,
     pub actor_type: ActorType,
-    /// `None` only for the system.
+    /// `None` for the system, and for a user who isn't known, such as at a failed sign-in
+    /// ([`super::Actor::Visitor`]).
     pub actor_id: Option<Uuid>,
     /// `None` only for the system.
     pub ip_address: Option<IpNetwork>,

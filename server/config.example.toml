@@ -143,6 +143,26 @@ challenge_lifetime = "10m"
 # used to flood someone's inbox. Sign-ups in between still get the same answer, but no email.
 notice_interval = "15m"
 
+[sign_in]
+# Sign-in (AUTH-05) and its protection against guessing (AUTH-08, SEC-08). Failed sign-ins are
+# counted per email address, whether or not it has an account, in the database, so that every
+# instance sees the same counts. They are also counted per network, one IPv4 address or one IPv6
+# /64, in memory by each instance.
+# How many failed sign-ins with one email address within the window block sign-in with it.
+max_failures = 10
+# The time over which failed sign-ins are counted, per address and per network.
+failure_window = "15m"
+# How long sign-in with an address stays blocked. The owner of the account, if any, is emailed.
+block_duration = "15m"
+# How many failed sign-ins one network may make within the window. Further attempts are refused
+# until the window has moved on.
+max_failures_per_network = 50
+# How many networks are counted at once, so that counting takes bounded memory. While that many
+# are, failures from other networks aren't counted.
+max_tracked_networks = 100000
+# How long a sign-in lasts at most (AUTH-09).
+session_lifetime = "30d"
+
 [log]
 # "json" (one object per line, for log collectors) or "text" (for development).
 format = "json"
