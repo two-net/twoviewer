@@ -5,8 +5,12 @@
 // `light-dark()` picks the value for the resolved theme. With the System option, `color-scheme`
 // is `light dark` and follows the operating system's or browser's preference as it changes
 // (THM-02). The Light and Dark options set `data-theme` on `<html>` (`Theme`, and `theme.js` before
-// the first paint), which fixes it. The colors are provisional until the palettes are designed
-// (OI-6, #19).
+// the first paint), which fixes it.
+//
+// Both palettes meet WCAG 2.1 AA contrast (THM-07): 4.5:1 for text, 3:1 for the borders of
+// controls, focus indicators and status graphics. `src/app/shared/theme/palette.spec.ts` checks
+// every pair of colors that is used together, in both themes. Put a color on another background
+// only once that pair is added there.
 
 :root {
   color-scheme: light dark;
@@ -15,13 +19,27 @@
   --color-surface: light-dark(#f4f5f7, #1c1f24);
   --color-text: light-dark(#1b1d21, #e8eaed);
   --color-text-muted: light-dark(#575c66, #a3a9b3);
+  // Separators only, which need no contrast. Borders that identify a control, such as an input,
+  // use the strong border.
   --color-border: light-dark(#d5d8de, #3a3f47);
-  // Borders that identify a control, such as an input, need more contrast than separators.
   --color-border-strong: light-dark(#7c828d, #7d848f);
+  // The logo's blue in the Light theme.
   --color-accent: light-dark(#1f5fd6, #7aa7ff);
   --color-on-accent: light-dark(#ffffff, #0b1630);
   --color-danger: light-dark(#b42318, #ff8a80);
   --color-on-danger: light-dark(#ffffff, #2a0705);
+  // Statuses such as a device being online or a transfer completed.
+  --color-success: light-dark(#1f7a3a, #4ac26b);
+  --color-on-success: light-dark(#ffffff, #121417);
+  // Statuses that need attention, such as the warning before an idle session ends (SES-10).
+  --color-warning: light-dark(#8a5a00, #e3b341);
+  --color-on-warning: light-dark(#ffffff, #121417);
+  // The hint overlay's labels and grid (VIM-14). They lie on the remote screen, whose colors the
+  // theme never changes (THM-09), so they are the same in both themes. Draw every label and line
+  // in both colors, such as a filled label with an outline: they differ by more than 9:1, so one of
+  // them has at least 3:1 against any color of the remote screen.
+  --color-hint: #ffd33d;
+  --color-on-hint: #1b1d21;
   --color-focus: var(--color-accent);
   --color-backdrop: rgb(0 0 0 / 50%);
   --shadow: 0 0.25rem 1rem light-dark(rgb(0 0 0 / 15%), rgb(0 0 0 / 60%));
@@ -138,6 +156,7 @@ textarea {
   text-decoration: none;
   cursor: pointer;
 
+  // Controls that can't be used are exempt from the contrast requirements (WCAG 1.4.3, 1.4.11).
   &:disabled {
     opacity: 0.5;
     cursor: not-allowed;
@@ -164,6 +183,12 @@ textarea {
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius);
   background: var(--color-bg);
+
+  // Browsers' own placeholder colors can be too faint, such as Firefox's 54% opacity.
+  &::placeholder {
+    color: var(--color-text-muted);
+    opacity: 1;
+  }
 }
 
 // The page content of a layout: from 360 px wide (UI-07) up to a readable width.

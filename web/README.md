@@ -70,7 +70,7 @@ In [`src/app/shared/`](src/app/shared):
 | `Theme`, `<app-theme-picker>` | The theme option, and the radio buttons that choose it ([below](#theme)). |
 | `REDUCED_MOTION` | Whether motion should be reduced right now (ANI-04). Skip or shorten animations when it returns `true`. |
 
-Style with the color tokens in [`src/styles.scss`](src/styles.scss) (`var(--color-text)` and so on), never fixed colors, so that every component works in both themes (THM-06). CI fails on hex colors and color functions in component styles. The colors are provisional until the palettes are designed (#19).
+Style with the color tokens in [`src/styles.scss`](src/styles.scss) (`var(--color-text)` and so on), never fixed colors, so that every component works in both themes (THM-06) with enough contrast ([below](#colors-and-contrast)). CI fails on hex colors and color functions in component styles.
 
 ## Real-time updates
 
@@ -95,7 +95,7 @@ Both layouts start with the logo and the product name, which link to the home sc
 
 ## Theme
 
-The theme option is Light, Dark or System, and System is the default (THM-01). Every color token is a `light-dark()` pair, so the page follows `color-scheme` on `<html>`:
+The theme option is Light, Dark or System, and System is the default (THM-01). Every color token is a `light-dark()` pair, except the hint overlay's ([below](#colors-and-contrast)), so the page follows `color-scheme` on `<html>`:
 
 - With System, `color-scheme` is `light dark`, and the browser switches the colors, native controls and scrollbars whenever the system's preference changes, without any code (THM-02).
 - Light and Dark set `data-theme="light"` or `"dark"` on `<html>`, which fixes `color-scheme`.
@@ -105,6 +105,24 @@ The theme option is Light, Dark or System, and System is the default (THM-01). E
 [`public/theme.js`](public/theme.js) applies the remembered option before the first paint, so that no frame, including the splash screen, shows the other theme (THM-05). `index.html` loads it in `<head>` without `async` or `defer`, so that it runs before the page is drawn. Keep it a small file: the Content Security Policy blocks inline scripts. It reads the same `localStorage` key as `Theme`, and a spec runs it to check that. Its name has no content hash, so once the server serves the web client, it must be served so that browsers check for a newer version.
 
 Saving the option in the user's preferences, and applying it in every browser after sign-in (THM-04), comes with sign-in. The comment on `Theme.choose()` says where.
+
+### Colors and contrast
+
+Both palettes meet WCAG 2.1 AA contrast (THM-07): 4.5:1 for text, and 3:1 for the borders of controls, focus indicators and status graphics. The color tokens, without `--color-`, are for:
+
+| Tokens | For |
+|---|---|
+| `bg`, `surface` | Backgrounds: the page, dialogs and menus; the header, buttons, toasts and banners. |
+| `text`, `text-muted` | Text, and secondary text such as the footer and placeholders. |
+| `border-strong` | The borders of controls, such as inputs and buttons. `border` is for separators, which need no contrast. |
+| `accent`, `on-accent`, `focus` | Links, the current page, primary buttons and the focus indicator. |
+| `danger`, `on-danger` | Errors and destructive actions (UI-03). |
+| `success`, `on-success`, `warning`, `on-warning` | Statuses, such as a device being online, or the warning before an idle session ends (SES-10). |
+| `hint`, `on-hint` | The hint overlay (VIM-14). |
+
+[`src/app/shared/theme/palette.spec.ts`](src/app/shared/theme/palette.spec.ts) checks every pair of tokens that is used together, in both themes. Use a color only on a background it is paired with there, and an `on-` color only on its own color; for a new combination, add the pair to the spec. The spec also fails on a color token that is in no pair, unless it lists the token as decorative and says why. Controls that can't be used are exempt, which is why disabled buttons can be faded.
+
+In a remote session, the toolbar and the status bar have opaque `surface` backgrounds, never translucent ones over the remote screen, so that their contrast doesn't depend on what the remote screen shows. The hint overlay lies on the remote screen itself, whose colors the theme never changes (THM-09), so its colors are the same in both themes. Draw every label and grid line in both of them, such as a `hint` label with `on-hint` text and outline: they differ by more than 9:1, so one of them has at least 3:1 against any color of the remote screen.
 
 ## Text and translation
 
