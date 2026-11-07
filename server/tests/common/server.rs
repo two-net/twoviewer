@@ -222,11 +222,12 @@ impl Server {
 
 pub type Socket = WebSocketStream<TlsStream<TcpStream>>;
 
-/// Opens a WebSocket to `path` on `server`, sending `origin` if there is one.
+/// Opens a WebSocket to `path` on `server`, sending `origin` and `cookie` if there are.
 pub async fn connect(
     server: &Server,
     path: &str,
     origin: Option<&str>,
+    cookie: Option<&str>,
 ) -> Result<Socket, tungstenite::Error> {
     let tcp = TcpStream::connect(server.https).await?;
     let tls = TlsConnector::from(client_tls())
@@ -238,6 +239,11 @@ pub async fn connect(
         request
             .headers_mut()
             .insert(header::ORIGIN, origin.parse().unwrap());
+    }
+    if let Some(cookie) = cookie {
+        request
+            .headers_mut()
+            .insert(header::COOKIE, cookie.parse().unwrap());
     }
     let (socket, _) = tokio_tungstenite::client_async(request, tls).await?;
     Ok(socket)

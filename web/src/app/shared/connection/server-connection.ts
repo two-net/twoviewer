@@ -2,7 +2,13 @@ import { DOCUMENT } from '@angular/common';
 import { DestroyRef, Injectable, InjectionToken, inject, signal } from '@angular/core';
 import { Observable, Subject } from 'rxjs';
 import { reconnectDelay } from './backoff';
-import { ClientMessage, REALTIME_PATH, ServerEvent, ServerMessage } from './messages';
+import {
+  ClientMessage,
+  NOT_SIGNED_IN,
+  REALTIME_PATH,
+  ServerEvent,
+  ServerMessage,
+} from './messages';
 
 /** How long opening a connection may take, until the server's hello. */
 export const CONNECT_TIMEOUT_MS = 10_000;
@@ -40,6 +46,13 @@ export const WEB_SOCKET = new InjectionToken<(url: string) => Socket>('WEB_SOCKE
 export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting';
 
 /**
+ * Why the server closed the connection for want of a sign-in:
+ * - `ended`: the sign-in was active while connected, and has been revoked or has expired.
+ * - `none`: the browser had no active sign-in when it connected.
+ */
+export type SignedOutReason = 'ended' | 'none';
+
+/**
  * The real-time connection to the server (IF-09), which keeps screens up to date without a
  * reload (UI-02). The messages are described in `protocol/src/lib.rs`.
  *
@@ -49,6 +62,10 @@ export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnectin
  * After every interruption it reconnects with randomized, increasing delays (REL-05), and at once
  * when the browser is back online or the tab is shown again. While it has been down for longer
  * than {@link LOST_AFTER_MS}, {@link lost} is true and `<app-connection-banner>` says so (UI-05).
+ *
+ * The server accepts it only with an active sign-in. When the browser has none, or its sign-in
+ * ends, the server closes it with {@link NOT_SIGNED_IN}: the connection stops, and
+ * {@link signedOut} says why.
  */
 @Injectable({ providedIn: 'root' })
 export class ServerConnection {
@@ -65,6 +82,9 @@ export class ServerConnection {
   readonly events: Observable<ServerEvent> = this.eventSubject.asObservable();
   private readonly resyncSubject = new Subject<void>();
   readonly resyncs: Observable<void> = this.resyncSubject.asObservable();
+  private readonly signedOutSubject = new Subject<SignedOutReason>();
+  /** Fires when the server says that this browser's sign-in has ended, or that it has none. */
+  readonly signedOut: Observable<SignedOutReason> = this.signedOutSubject.asObservable();
 
   private socket?: Socket;
   private attempt = 0;
@@ -126,7 +146,16 @@ export class ServerConnection {
     }
     this.socket = socket;
     socket.onmessage = (event) => this.receive(event.data);
-    socket.onclose = () => this.reconnectLater();
+    socket.onclose = (event) => {
+      if (event.code === NOT_SIGNED_IN) {
+        // Only an active sign-in gets a hello.
+        const reason = this.current() === 'connected' ? 'ended' : 'none';
+        this.stop();
+        this.signedOutSubject.next(reason);
+      } else {
+        this.reconnectLater();
+      }
+    };
     this.expectMessage();
   }
 

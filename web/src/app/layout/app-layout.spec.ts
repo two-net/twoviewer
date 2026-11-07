@@ -1,9 +1,13 @@
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { Component } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { Router, provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
+import { NOT_SIGNED_IN } from '../shared/connection/messages';
 import { ServerConnection } from '../shared/connection/server-connection';
-import { provideFakeSockets } from '../shared/connection/testing';
+import { FakeSockets, provideFakeSockets } from '../shared/connection/testing';
+import { Toasts } from '../shared/toast/toasts';
 import { AppLayout } from './app-layout';
 
 @Component({ template: '' })
@@ -13,8 +17,10 @@ describe('AppLayout', () => {
   let harness: RouterTestingHarness;
   let page: HTMLElement;
   let menuButton: HTMLButtonElement;
+  let sockets: FakeSockets;
 
   beforeEach(async () => {
+    sockets = new FakeSockets();
     TestBed.configureTestingModule({
       providers: [
         provideRouter([
@@ -26,8 +32,11 @@ describe('AppLayout', () => {
               { path: 'vpn', component: Screen },
             ],
           },
+          { path: 'sign-in', component: Screen },
         ]),
-        provideFakeSockets(),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideFakeSockets(sockets),
       ],
     });
     harness = await RouterTestingHarness.create('/devices');
@@ -71,6 +80,29 @@ describe('AppLayout', () => {
 
   it('opens the connection to the server', () => {
     expect(TestBed.inject(ServerConnection).state()).toBe('connecting');
+  });
+
+  it('goes to the sign-in page when the sign-in ends, and says why', async () => {
+    sockets.last.receive({ type: 'hello', heartbeatTimeoutMs: 8000 });
+
+    sockets.last.drop(NOT_SIGNED_IN);
+    await harness.fixture.whenStable();
+
+    expect(TestBed.inject(Router).url).toBe('/sign-in');
+    expect(TestBed.inject(ServerConnection).state()).toBe('idle');
+    expect(
+      TestBed.inject(Toasts)
+        .toasts()
+        .map((toast) => toast.message),
+    ).toEqual(["You've been signed out. Sign in again to continue."]);
+  });
+
+  it('goes to the sign-in page without a word when the browser was not signed in', async () => {
+    sockets.last.drop(NOT_SIGNED_IN);
+    await harness.fixture.whenStable();
+
+    expect(TestBed.inject(Router).url).toBe('/sign-in');
+    expect(TestBed.inject(Toasts).toasts()).toEqual([]);
   });
 
   it('marks the current screen', () => {

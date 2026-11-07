@@ -8,14 +8,18 @@
 //!   application/json`. Browsers send that type to another site only after a CORS preflight,
 //!   which the server never grants, so other sites cannot make a user's browser call the API.
 //!   Take the body as `Result<Json<T>, JsonRejection>` and use `?`, so that a malformed body gets
-//!   the same kind of answer as other errors.
+//!   the same kind of answer as other errors. Take path parameters as `Result<Path<T>,
+//!   PathRejection>` for the same reason.
+//! - Requests that change something are refused when another site started them, whatever their
+//!   body ([`crate::http`]).
 //!
 //! | Status | `error` | When |
 //! |---|---|---|
 //! | 400 | `malformed` | The body is not the JSON the endpoint expects. |
 //! | 401 | `sign_in_failed`, `not_signed_in` | The credentials are wrong, or the request needs a sign-in it doesn't have. |
+//! | 403 | `cross_site_request` | Another site started a request that would change something. |
 //! | 409 | e.g. `terms_changed` | The request is based on something that has changed. |
-//! | 410 | e.g. `link_expired` | What the request refers to is gone or never existed. |
+//! | 410 | e.g. `link_expired`, `sign_in_ended` | What the request refers to is gone or never existed. |
 //! | 422 | `invalid` | Fields don't meet the rules; `fields` says which, and why. |
 //! | 428 | e.g. `challenge_required` | Something must be done first; the body says what. |
 //! | 429 | `too_many_requests` | Too many requests; `Retry-After` says when to try again. |
@@ -25,7 +29,7 @@ use std::{collections::BTreeMap, time::Duration};
 
 use axum::{
     Json,
-    extract::rejection::JsonRejection,
+    extract::rejection::{JsonRejection, PathRejection},
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -40,6 +44,8 @@ pub enum ApiError {
     Malformed,
     /// 401: the credentials are wrong, or the request needs a sign-in it doesn't have.
     Unauthorized { code: &'static str },
+    /// 403: the request is not allowed, whoever makes it.
+    Forbidden { code: &'static str },
     /// 422: some fields don't meet the rules.
     Invalid(FieldErrors),
     /// 409: the request is based on something that has changed.
@@ -108,6 +114,12 @@ impl From<JsonRejection> for ApiError {
     }
 }
 
+impl From<PathRejection> for ApiError {
+    fn from(_: PathRejection) -> Self {
+        Self::Malformed
+    }
+}
+
 impl From<sea_orm::DbErr> for ApiError {
     fn from(err: sea_orm::DbErr) -> Self {
         Self::internal(err)
@@ -116,6 +128,18 @@ impl From<sea_orm::DbErr> for ApiError {
 
 impl From<crate::audit::Error> for ApiError {
     fn from(err: crate::audit::Error) -> Self {
+        Self::internal(err)
+    }
+}
+
+impl From<crate::realtime::PublishError> for ApiError {
+    fn from(err: crate::realtime::PublishError) -> Self {
+        Self::internal(err)
+    }
+}
+
+impl From<crate::accounts::sign_in_session::RevokeError> for ApiError {
+    fn from(err: crate::accounts::sign_in_session::RevokeError) -> Self {
         Self::internal(err)
     }
 }
@@ -129,6 +153,7 @@ impl IntoResponse for ApiError {
                 json!({ "error": "invalid", "fields": fields }),
             ),
             Self::Unauthorized { code } => (StatusCode::UNAUTHORIZED, json!({ "error": code })),
+            Self::Forbidden { code } => (StatusCode::FORBIDDEN, json!({ "error": code })),
             Self::Conflict { code } => (StatusCode::CONFLICT, json!({ "error": code })),
             Self::Gone { code } => (StatusCode::GONE, json!({ "error": code })),
             Self::PreconditionRequired { code, mut details } => {
@@ -209,6 +234,13 @@ mod tests {
                 },
                 StatusCode::UNAUTHORIZED,
                 json!({ "error": "sign_in_failed" }),
+            ),
+            (
+                ApiError::Forbidden {
+                    code: "cross_site_request",
+                },
+                StatusCode::FORBIDDEN,
+                json!({ "error": "cross_site_request" }),
             ),
             (
                 ApiError::Conflict {

@@ -13,7 +13,8 @@
 //! 4. After every hello and every [`ServerMessage::Resync`], events may have been missed, so the
 //!    client fetches all of the state it shows.
 //!
-//! Clients reconnect after every close, with randomized, increasing delays (REL-05). They ignore
+//! Clients reconnect after every close, with randomized, increasing delays (REL-05), except a
+//! browser closed with [`close::NOT_SIGNED_IN`], which needs to sign in first. They ignore
 //! message types they do not know, so that the server can add some before every Host Agent is
 //! updated. The server closes the connection when a client sends anything else than what is
 //! defined here.
@@ -70,7 +71,7 @@ pub enum ClientMessage {
 }
 
 /// The close codes the server uses (RFC 6455, section 7.4.1). Clients reconnect after any of
-/// them.
+/// them but [`NOT_SIGNED_IN`].
 pub mod close {
     /// The connection was silent for longer than the heartbeat timeout.
     pub const GOING_AWAY: u16 = 1001;
@@ -82,6 +83,10 @@ pub mod close {
     pub const SERVICE_RESTART: u16 = 1012;
     /// The client did not keep up with its messages.
     pub const TRY_AGAIN_LATER: u16 = 1013;
+    /// The browser has no active sign-in: it never had one, or it was revoked or has expired. The
+    /// browser goes to the sign-in page rather than reconnecting. From the range that RFC 6455
+    /// leaves to applications.
+    pub const NOT_SIGNED_IN: u16 = 4001;
 }
 
 #[cfg(test)]

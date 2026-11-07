@@ -22,7 +22,7 @@ use tokio::{net::TcpListener, sync::oneshot};
 use tracing::{info, warn};
 
 use crate::{
-    accounts::{Accounts, password::Passwords},
+    accounts::{Accounts, Authenticator, password::Passwords, sign_in_session::Lifetime},
     config::{Config, Secrets},
     db::{self, migrate::MigrationError},
     email::{self, Mailer},
@@ -220,8 +220,14 @@ async fn start(
         "database schema is current"
     );
     let db = db::connect(database_url).await?;
-    let realtime = Realtime::start(database_url, config.realtime.clone(), metrics.clone())
-        .await
-        .map_err(RunError::Realtime)?;
+    let authenticator = Authenticator::new(db.clone(), Lifetime::new(&config.sign_in));
+    let realtime = Realtime::start(
+        database_url,
+        config.realtime.clone(),
+        authenticator,
+        metrics.clone(),
+    )
+    .await
+    .map_err(RunError::Realtime)?;
     Ok((db, realtime))
 }

@@ -25,6 +25,14 @@
 //! personal data: clients fetch the state through the API, which checks that they may see it
 //! (AUTH-17). An event must fit in a notification, under 8000 bytes.
 //!
+//! Browsers connect only with an active sign-in ([`crate::accounts::Authenticator`]), and receive
+//! the events of their user. When their sign-in ends, because it is revoked ([`end_sign_in`]) or
+//! expires, the server closes the connection with
+//! [`NOT_SIGNED_IN`](twoviewer_protocol::close::NOT_SIGNED_IN), and the browser goes to the sign-in
+//! page rather than reconnecting. A browser without an active sign-in is closed the same way as
+//! soon as it connects: browsers can read the code of a close, but not the status of a refused
+//! handshake.
+//!
 //! Events are not stored. A client that was disconnected, or whose instance lost its database
 //! connection for a moment, may have missed some, so it fetches its state after every hello and
 //! every resync.
@@ -48,20 +56,24 @@ use axum::{
 };
 use sea_orm::{ConnectionTrait, DbBackend, DbErr, Statement, prelude::Uuid};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tokio::task::JoinHandle;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
-use tracing::{Instrument, info_span};
+use tracing::{Instrument, error, info_span};
 use twoviewer_protocol::{AGENT_PATH, BROWSER_PATH, Event};
 
-use crate::{config, http::CorrelationId, metrics::Metrics};
+use crate::{
+    accounts::{Authenticator, SignedIn},
+    config,
+    http::{self, CorrelationId},
+    metrics::Metrics,
+};
 
 use self::{hub::Hub, socket::Connection};
 
-/// Who receives an event. A connection receives the events of the topics of its peer.
-///
-/// Connections are anonymous until browser connections check the sign-in (#26, with
-/// [`crate::accounts::Authenticator`]) and Host Agent credentials exist (#36). Then topics such as
-/// a user or a device are added, and a connection subscribes to the ones its credential allows.
+/// Who receives an event. A connection receives the events of the topics its credential allows:
+/// a browser those of its sign-in's user. Host Agent connections are anonymous until Host Agent
+/// credentials exist (#33, #36); then topics such as a device are added.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Topic {
@@ -69,26 +81,39 @@ pub enum Topic {
     Browsers,
     /// Every Host Agent connection.
     Agents,
+    /// The browser connections of one user.
+    User(Uuid),
+    /// The browser connection of one sign-in. Only [`end_sign_in`] publishes to it.
+    SignIn(Uuid),
 }
 
-/// The kind of client at the other end of a connection.
+/// The event that ends the connections of a sign-in. Connections don't pass it on.
+const SIGN_IN_ENDED: &str = "sign_in.ended";
+
+/// Who is at the other end of a connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Peer {
-    Browser,
+    /// A browser, and its sign-in if it has an active one.
+    Browser(Option<SignedIn>),
     Agent,
 }
 
 impl Peer {
-    fn topics(self) -> &'static [Topic] {
+    fn topics(self) -> Vec<Topic> {
         match self {
-            Self::Browser => &[Topic::Browsers],
-            Self::Agent => &[Topic::Agents],
+            Self::Browser(Some(signed_in)) => vec![
+                Topic::Browsers,
+                Topic::User(signed_in.user_id),
+                Topic::SignIn(signed_in.session_id),
+            ],
+            Self::Browser(None) => Vec::new(),
+            Self::Agent => vec![Topic::Agents],
         }
     }
 
     fn name(self) -> &'static str {
         match self {
-            Self::Browser => "browser",
+            Self::Browser(_) => "browser",
             Self::Agent => "agent",
         }
     }
@@ -130,10 +155,26 @@ pub async fn publish<C: ConnectionTrait>(
     Ok(())
 }
 
+/// Closes the browser connection of the sign-in `session_id`, on every instance, once the
+/// transaction of `db` is committed. [`crate::accounts::sign_in_session::revoke`] does this.
+pub async fn end_sign_in<C: ConnectionTrait>(db: &C, session_id: Uuid) -> Result<(), PublishError> {
+    publish(
+        db,
+        Topic::SignIn(session_id),
+        &Event {
+            name: SIGN_IN_ENDED.to_owned(),
+            data: json!({}),
+        },
+    )
+    .await
+}
+
 /// The real-time connections of this instance.
 pub struct Realtime {
     hub: Arc<Hub>,
     config: config::Realtime,
+    /// Checks the sign-in of browser connections.
+    authenticator: Authenticator,
     metrics: Arc<Metrics>,
     /// Cancelled on shutdown, which closes every connection.
     closing: CancellationToken,
@@ -147,6 +188,7 @@ impl Realtime {
     pub async fn start(
         database_url: &str,
         config: config::Realtime,
+        authenticator: Authenticator,
         metrics: Arc<Metrics>,
     ) -> Result<Arc<Self>, sqlx::Error> {
         let hub = Arc::new(Hub::default());
@@ -159,6 +201,7 @@ impl Realtime {
         Ok(Arc::new(Self {
             hub,
             config,
+            authenticator,
             metrics,
             closing: CancellationToken::new(),
             connections: TaskTracker::new(),
@@ -191,6 +234,7 @@ impl Realtime {
             peer,
             hub: self.hub.clone(),
             config: self.config.clone(),
+            authenticator: self.authenticator.clone(),
             metrics: self.metrics.clone(),
             closing: self.closing.clone(),
         };
@@ -226,10 +270,17 @@ async fn browser(
     // Browsers send the page's origin with every WebSocket handshake, and cookies with it, but no
     // CORS check applies. Without this, any website a user visits could open a connection in
     // their name (SEC-09).
-    if !same_origin(&headers) {
+    if !http::same_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    realtime.accept(upgrade, Peer::Browser, correlation_id)
+    // Without a sign-in, the connection is closed once open, with a code the browser can read.
+    match realtime.authenticator.signed_in(&headers).await {
+        Ok(signed_in) => realtime.accept(upgrade, Peer::Browser(signed_in), correlation_id),
+        Err(err) => {
+            error!(error = %err, "cannot check the sign-in of a real-time connection");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 async fn agent(
@@ -245,79 +296,9 @@ async fn agent(
     realtime.accept(upgrade, Peer::Agent, correlation_id)
 }
 
-/// Whether the request comes from a page served by this host, over HTTPS.
-fn same_origin(headers: &HeaderMap) -> bool {
-    let header = |name| headers.get(name).and_then(|value| value.to_str().ok());
-    let (Some(origin), Some(host)) = (header(header::ORIGIN), header(header::HOST)) else {
-        return false;
-    };
-    origin
-        .strip_prefix("https://")
-        .is_some_and(|origin| origin.eq_ignore_ascii_case(host))
-}
-
 #[cfg(test)]
 mod tests {
-    use axum::http::HeaderValue;
-
     use super::*;
-
-    fn headers(origin: Option<&'static str>, host: Option<&'static str>) -> HeaderMap {
-        let mut headers = HeaderMap::new();
-        if let Some(origin) = origin {
-            headers.insert(header::ORIGIN, HeaderValue::from_static(origin));
-        }
-        if let Some(host) = host {
-            headers.insert(header::HOST, HeaderValue::from_static(host));
-        }
-        headers
-    }
-
-    #[test]
-    fn only_pages_of_this_host_over_https_are_the_same_origin() {
-        for (origin, host, same) in [
-            (
-                Some("https://twoviewer.example"),
-                Some("twoviewer.example"),
-                true,
-            ),
-            (Some("https://localhost:8443"), Some("localhost:8443"), true),
-            (
-                Some("https://TwoViewer.example"),
-                Some("twoviewer.example"),
-                true,
-            ),
-            (
-                Some("https://evil.example"),
-                Some("twoviewer.example"),
-                false,
-            ),
-            (
-                Some("http://twoviewer.example"),
-                Some("twoviewer.example"),
-                false,
-            ),
-            (
-                Some("https://twoviewer.example:8443"),
-                Some("twoviewer.example"),
-                false,
-            ),
-            (
-                Some("https://twoviewer.example.evil"),
-                Some("twoviewer.example"),
-                false,
-            ),
-            (Some("null"), Some("twoviewer.example"), false),
-            (None, Some("twoviewer.example"), false),
-            (Some("https://twoviewer.example"), None, false),
-        ] {
-            assert_eq!(
-                same_origin(&headers(origin, host)),
-                same,
-                "origin {origin:?}, host {host:?}"
-            );
-        }
-    }
 
     #[tokio::test]
     async fn events_that_do_not_fit_in_a_notification_are_rejected() {

@@ -10,7 +10,7 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter, Set,
     TransactionTrait,
@@ -240,7 +240,6 @@ impl Attempt<'_> {
         rehashed: Option<PasswordHash>,
     ) -> Result<Response, ApiError> {
         let accounts = self.accounts;
-        let lifetime = accounts.sign_in.session_lifetime;
         let txn = accounts.db.begin().await?;
         if let Status::Blocked { retry_after } =
             throttle::clear_unless_blocked(&txn, Scope::SignIn, &self.subject).await?
@@ -259,16 +258,12 @@ impl Attempt<'_> {
 
         let token = Token::generate();
         let now = Utc::now();
-        let expires_at = chrono::Duration::from_std(lifetime)
-            .ok()
-            .and_then(|lifetime| now.checked_add_signed(lifetime))
-            .unwrap_or(DateTime::<Utc>::MAX_UTC);
         let session = sign_in_session::ActiveModel {
             user_id: Set(user_id),
             token_hash: Set(token.hash()),
             created_at: Set(now),
             last_active_at: Set(now),
-            expires_at: Set(expires_at),
+            expires_at: Set(accounts.lifetime.expiry(now, now)),
             ip_address: Set(IpNetwork::from(self.origin.ip_address)),
             client_description: Set(self.origin.client_description.clone()),
             revoked_at: Set(None),
@@ -291,11 +286,15 @@ impl Attempt<'_> {
             },
         )
         .await?;
+        // So that the user's open lists of sign-ins show it.
+        sign_in_session::changed(&txn, user_id).await?;
         txn.commit().await?;
 
+        // Kept as long as the sign-in can last; the server ends it earlier if it isn't used.
+        let max_age = accounts.lifetime.max;
         Ok((
             StatusCode::NO_CONTENT,
-            [(header::SET_COOKIE, signed_in::cookie(&token, lifetime))],
+            [(header::SET_COOKIE, signed_in::cookie(&token, max_age))],
         )
             .into_response())
     }

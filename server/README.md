@@ -80,6 +80,16 @@ Every response of the HTTPS listener carries these headers, whatever its route o
 
 The headers replace any that a handler sets, so the policy is in one place. HSTS leaves out `preload`, which is hard to undo. `http.hsts_max_age = "0s"` makes browsers forget the policy. Development on `localhost` needs this, because HSTS covers every port of a host.
 
+### Forged requests
+
+Other sites must not be able to make a signed-in user's browser act in their name (SEC-09). Three things keep them out:
+
+- The sign-in cookie is `SameSite=Strict`, so browsers don't send it with requests that other sites start ([Sign-in](#sign-in)).
+- The API takes only JSON bodies, which browsers send to another site only after a CORS preflight that the server never grants.
+- Every request that may change something, which is any but `GET`, `HEAD` and `OPTIONS`, is refused with `403` (`cross_site_request`) when its `Sec-Fetch-Site` header is there and isn't `same-origin`, or its `Origin` header is there and isn't `https://` + its `Host`. This also covers requests without a body, such as sign-out, and sites that browsers count as the same site for cookies, such as other subdomains. Browsers send at least one of the two headers with such requests; clients that send neither, such as Host Agents, aren't browsers and carry no cookie of their own accord.
+
+The check is in [`src/http.rs`](src/http.rs) and applies to every route. The development server of the web client proxies requests with an `Origin` of the server's own ([`../web/proxy.conf.json`](../web/proxy.conf.json)), and leaves `Sec-Fetch-Site` as the browser sent it.
+
 ## Real-time connection
 
 Browsers and Host Agents keep a WebSocket open to the HTTPS listener for presence, session setup and notifications (IF-09). The code is in [`src/realtime/`](src/realtime/mod.rs), and the messages are in the shared crate [`../protocol`](../protocol/src/lib.rs).
@@ -89,9 +99,9 @@ Browsers and Host Agents keep a WebSocket open to the HTTPS listener for presenc
 | `/api/realtime` | browsers | with an `Origin` of this host over HTTPS (`https://` + the `Host` header). Browsers send cookies with WebSocket handshakes and apply no CORS check, so this keeps other websites from connecting in a user's name. |
 | `/api/agent/realtime` | Host Agents | without an `Origin`, which browsers always send, so web pages can't pose as agents. |
 
-Others get `403`. Connections are anonymous until browser connections check the sign-in (#26, with `accounts::Authenticator`) and Host Agent credentials exist (#33, #36); those checks go into the same two handlers.
+Others get `403`. A browser also needs an active sign-in, from its cookie ([Sign-in](#sign-in)), and receives the events of its user. Without one, the connection is opened and closed at once with code 4001 (`NOT_SIGNED_IN`), because browsers can read the code of a close but not the status of a refused handshake; the web client then goes to the sign-in page instead of reconnecting. A connection is closed the same way when its sign-in is revoked, on whichever instance it is, and when it expires: the connection checks again when the sign-in is due to end, and at least daily, since using the sign-in in the meantime moves the end on. Host Agent connections are anonymous until Host Agent credentials exist (#33, #36); that check goes into their handler.
 
-**Messages.** The server sends `hello` first, then a `heartbeat` every `realtime.heartbeat_interval`, which the client answers. A connection that sends nothing for `realtime.heartbeat_timeout` is closed, and clients reconnect when the server is silent that long. With the defaults (3 s and 8 s), a Host Agent that disappears without closing its connection is offline within 10 seconds (DEV-07). A client that sends anything other than a heartbeat, a message above `realtime.max_message_bytes`, or that falls `realtime.send_queue_length` messages behind is disconnected. Clients reconnect after every close, with randomized, increasing delays (REL-05).
+**Messages.** The server sends `hello` first, then a `heartbeat` every `realtime.heartbeat_interval`, which the client answers. A connection that sends nothing for `realtime.heartbeat_timeout` is closed, and clients reconnect when the server is silent that long. With the defaults (3 s and 8 s), a Host Agent that disappears without closing its connection is offline within 10 seconds (DEV-07). A client that sends anything other than a heartbeat, a message above `realtime.max_message_bytes`, or that falls `realtime.send_queue_length` messages behind is disconnected. Clients reconnect after every close, with randomized, increasing delays (REL-05), except browsers closed with 4001.
 
 **Events.** A feature calls `realtime::publish(&txn, topic, &event)` in the transaction of its change. The event goes through PostgreSQL `NOTIFY` on channel `twoviewer_realtime`, so it is sent only if the transaction commits, and it reaches the connections on every instance (CAP-03) without another backing service (CON-02). Each instance listens on one database connection of its own, besides the pool. An event names what changed, such as a device ID, never the new state or anything secret: clients fetch the state through the API, which checks that they may see it (AUTH-17). It must stay under 8000 bytes, the notification limit.
 
@@ -153,14 +163,22 @@ People create an account with an email address, a display name and a password, a
 
 ## Sign-in
 
-People sign in with their email address and password (AUTH-05). Failed attempts are throttled per address (AUTH-08) and per network (SEC-08), and no answer reveals whether an address is registered (SEC-14). The code is in [`src/accounts/sign_in.rs`](src/accounts/sign_in.rs) and [`src/throttle.rs`](src/throttle.rs).
+People sign in with their email address and password (AUTH-05). Failed attempts are throttled per address (AUTH-08) and per network (SEC-08), and no answer reveals whether an address is registered (SEC-14). Sign-ins end after a week unused and a month at most, and users can see and end theirs (AUTH-09). The code is in [`src/accounts/sign_in.rs`](src/accounts/sign_in.rs), [`src/accounts/sign_ins.rs`](src/accounts/sign_ins.rs), [`src/accounts/sign_in_session.rs`](src/accounts/sign_in_session.rs) and [`src/throttle.rs`](src/throttle.rs).
 
 | Request | Answers |
 |---|---|
 | `POST /api/sign-in` with `email` and `password` | `204` with the sign-in cookie; `401` (`sign_in_failed`) for a wrong password or an address without an account alike; `422` for empty fields or something that isn't an address; `429` with `Retry-After` while blocked |
 | `GET /api/account` | `200` with the signed-in user's `id`, `email`, `displayName` and `emailVerified`; `401` (`not_signed_in`) without an active sign-in |
+| `GET /api/sign-ins` | `200` with `signIns`, the user's active sign-ins: `id`, `client` (such as "Firefox on Linux"), `ipAddress`, `signedInAt`, `lastActiveAt` and whether it is the `current` one, which comes first, then the most recently used first; `401` |
+| `DELETE /api/sign-ins/{id}` | `204`, and for the current sign-in a cookie that removes it; `410` (`sign_in_ended`) for a sign-in that has ended, or that isn't the user's; `400` for an `id` that isn't one; `401` |
+| `DELETE /api/sign-ins` | `204` once every sign-in but the current one is revoked; `401` |
+| `POST /api/sign-out` | `204` with a cookie that removes the sign-in cookie, also when the sign-in has already ended |
 
-**Sign-ins.** Signing in stores a sign-in in `sign_in_session`, with the IP address and browser it came from, and gives the browser its token in the cookie `__Host-twoviewer-session`: `HttpOnly`, so page scripts can't read it, `Secure` and `__Host-`, so it goes over HTTPS only and only this host can set it, and `SameSite=Strict`, so other sites can't make the browser send it (SEC-09). The database stores only the SHA-256 of the token (SEC-07). A sign-in lasts at most `sign_in.session_lifetime` (30 days, AUTH-09). Expiry after inactivity, sign-out, and listing and revoking sign-ins come with #26. Handlers that need a signed-in user take `accounts::SignedIn`. Unverified users can sign in (AUTH-02).
+**Sign-ins.** Signing in stores a sign-in in `sign_in_session`, with the IP address and browser it came from, and gives the browser its token in the cookie `__Host-twoviewer-session`: `HttpOnly`, so page scripts can't read it, `Secure` and `__Host-`, so it goes over HTTPS only and only this host can set it, and `SameSite=Strict`, so other sites can't make the browser send it (SEC-09, and [Forged requests](#forged-requests)). The database stores only the SHA-256 of the token (SEC-07). Handlers that need a signed-in user take `accounts::SignedIn`. Unverified users can sign in (AUTH-02).
+
+**Expiry (AUTH-09).** A sign-in ends after `sign_in.idle_timeout` (7 days) without use, and at the latest `sign_in.session_lifetime` (30 days) after sign-in, however much it is used. Every request that it authenticates is use: it sets `last_active_at` to now and `expires_at` to the earlier of the two ends. That write happens at most once a minute per sign-in, so a burst of requests writes once, and a sign-in can end up to a minute early. The cookie is kept for `sign_in.session_lifetime`; the server ends the sign-in earlier if it isn't used. Ended sign-ins are kept for 30 days after `coalesce(revoked_at, expires_at)`, then deleted by the retention job (Table 5.3-A, #66).
+
+**Revoking.** The user sees their active sign-ins in Settings and can revoke any of them, or all but the one they are using (AUTH-09); signing out revokes the one they are using. Another user's sign-in gets the same `410` as one that has ended, so its ID reveals nothing (AUTH-17). Revoking closes the browser's real-time connection, which takes it to the sign-in page, and tells the user's other browsers to reload their list (`sign_ins.changed`). Password reset (#28), account deletion (#30) and suspension (#68) revoke all of a user's sign-ins with `sign_in_session::revoke(.., Revoke::All, ..)`, in the transaction of their change.
 
 **Not revealing who has an account (SEC-14).** A wrong password and an address without an account get the same `401`, and the password is hashed either way, so the answer takes as long. Blocks work the same way: they are per address, whether or not it has an account.
 
@@ -168,7 +186,7 @@ People sign in with their email address and password (AUTH-05). Failed attempts 
 
 **Networks (SEC-08).** Past `sign_in.max_failures_per_network` (50) failed sign-ins within the window, a network (an IPv4 address or an IPv6 /64) gets `429` until the window has moved on, before any password is hashed. This slows down guessing across many addresses, which the limit per address doesn't catch. Like the sign-up limits, it is counted in memory by each instance, for at most `sign_in.max_tracked_networks` networks, and no IP addresses are stored.
 
-**Audit.** Every attempt records `sign_in_succeeded` or `sign_in_failed`, before the answer (AUD-03), with the IP address and browser. Failures are recorded with a user actor without an ID, since whoever tried isn't known to be the owner, and with the account as the target if the address has one. Their reason is `invalid_credentials`, `blocked` or `network_blocked`. The failure that starts a block also records `sign_in_blocked`, with the reason `too_many_failures`. Every failed attempt, refused ones included, counts in `twoviewer_sign_ins_failed_total`.
+**Audit.** Every attempt records `sign_in_succeeded` or `sign_in_failed`, before the answer (AUD-03), with the IP address and browser. Failures are recorded with a user actor without an ID, since whoever tried isn't known to be the owner, and with the account as the target if the address has one. Their reason is `invalid_credentials`, `blocked` or `network_blocked`. The failure that starts a block also records `sign_in_blocked`, with the reason `too_many_failures`. Every failed attempt, refused ones included, counts in `twoviewer_sign_ins_failed_total`. Signing out records `sign_out`, and revoking records `sign_in_session_revoked`, once per sign-in that ends, with its ID in `sign_in_session_id`. Signing out of a sign-in that had already ended records nothing.
 
 **Still to come.** The second step for users with MFA (AUTH-05) comes with MFA itself (#27), between the password check and the creation of the sign-in. Suspended accounts can't sign in once suspension exists (OPS-03, #68).
 

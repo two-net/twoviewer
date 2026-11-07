@@ -28,10 +28,10 @@ export class FakeSocket implements Socket {
     this.onmessage?.({ data: JSON.stringify(message) } as MessageEvent);
   }
 
-  /** The connection ends without the client closing it. */
-  drop(): void {
+  /** The connection ends without the client closing it, with the close code `code`, if any. */
+  drop(code?: number): void {
     this.readyState = 3;
-    this.onclose?.({} as CloseEvent);
+    this.onclose?.({ code } as CloseEvent);
   }
 }
 

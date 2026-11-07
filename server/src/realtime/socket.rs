@@ -1,25 +1,32 @@
 //! One connection: hello, heartbeats, events, and closing it.
 
-use std::{pin::pin, sync::Arc};
+use std::{pin::pin, sync::Arc, time::Duration};
 
 use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket};
+use chrono::Utc;
 use futures_util::{SinkExt, StreamExt, stream::SplitSink};
 use prometheus_client::metrics::gauge::Gauge;
+use sea_orm::prelude::DateTimeUtc;
 use tokio::{
     sync::mpsc,
     time::{Instant, MissedTickBehavior},
 };
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, warn};
 use twoviewer_protocol::{ClientMessage, ServerMessage, close};
 
-use super::{Peer, hub::Hub};
-use crate::{config, metrics::Metrics};
+use super::{Peer, SIGN_IN_ENDED, hub::Hub};
+use crate::{accounts::Authenticator, config, metrics::Metrics};
+
+/// The longest a browser connection goes without checking that its sign-in is still active,
+/// whenever it ends.
+const MAX_SIGN_IN_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 pub(super) struct Connection {
     pub(super) peer: Peer,
     pub(super) hub: Arc<Hub>,
     pub(super) config: config::Realtime,
+    pub(super) authenticator: Authenticator,
     pub(super) metrics: Arc<Metrics>,
     pub(super) closing: CancellationToken,
 }
@@ -31,7 +38,7 @@ impl Connection {
         let overflowed = CancellationToken::new();
         let _subscription = self
             .hub
-            .subscribe(self.peer.topics(), queue, overflowed.clone());
+            .subscribe(&self.peer.topics(), queue, overflowed.clone());
         let _online =
             (self.peer == Peer::Agent).then(|| Online::new(&self.metrics.host_agents_online));
         debug!("real-time connection opened");
@@ -51,6 +58,20 @@ impl Connection {
         let interval = self.config.heartbeat_interval;
         let timeout = self.config.heartbeat_timeout;
         let (mut sink, mut stream) = socket.split();
+
+        // Browsers need an active sign-in, until it ends.
+        let sign_in = match self.peer {
+            Peer::Browser(None) => {
+                return self
+                    .close(&mut sink, close::NOT_SIGNED_IN, "not signed in")
+                    .await;
+            }
+            Peer::Browser(Some(signed_in)) => Some(signed_in),
+            Peer::Agent => None,
+        };
+        let mut sign_in_check = pin!(tokio::time::sleep_until(check_at(
+            sign_in.map(|signed_in| signed_in.expires_at)
+        )));
 
         let hello = ServerMessage::Hello {
             heartbeat_timeout_ms: u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
@@ -74,6 +95,23 @@ impl Connection {
                 () = &mut silence => {
                     return self.close(&mut sink, close::GOING_AWAY, "no heartbeat").await;
                 }
+                () = &mut sign_in_check, if sign_in.is_some() => {
+                    let Some(signed_in) = sign_in else { continue };
+                    // It may have been used since, which moves its end on.
+                    match self.authenticator.active_until(signed_in.session_id).await {
+                        Ok(Some(expires_at)) => {
+                            sign_in_check.as_mut().reset(check_at(Some(expires_at)));
+                            continue;
+                        }
+                        Ok(None) => {
+                            return self.close(&mut sink, close::NOT_SIGNED_IN, "sign-in expired").await;
+                        }
+                        Err(err) => {
+                            warn!(error = %err, "cannot check the sign-in of a real-time connection");
+                            return self.close(&mut sink, close::TRY_AGAIN_LATER, "cannot check the sign-in").await;
+                        }
+                    }
+                }
                 received = stream.next() => {
                     // Anything from the client shows that it is still there.
                     silence.as_mut().reset(Instant::now() + timeout);
@@ -94,7 +132,12 @@ impl Connection {
                         Some(Err(_)) => return "connection error",
                     }
                 }
-                Some(message) = queued.recv() => message,
+                Some(message) = queued.recv() => {
+                    if matches!(&message, ServerMessage::Event(event) if event.name == SIGN_IN_ENDED) {
+                        return self.close(&mut sink, close::NOT_SIGNED_IN, "signed out").await;
+                    }
+                    message
+                }
                 _ = heartbeats.tick() => ServerMessage::Heartbeat,
             };
             if !self.send(&mut sink, &message).await {
@@ -133,6 +176,19 @@ impl Connection {
         let _ = tokio::time::timeout(self.config.heartbeat_timeout, closing).await;
         reason
     }
+}
+
+/// When to check next whether a sign-in that ends at `expires_at` is still active: then, but at
+/// least daily. Connections without a sign-in never check.
+fn check_at(expires_at: Option<DateTimeUtc>) -> Instant {
+    let wait = match expires_at {
+        Some(expires_at) => (expires_at - Utc::now())
+            .to_std()
+            .unwrap_or(Duration::ZERO)
+            .min(MAX_SIGN_IN_CHECK_INTERVAL),
+        None => MAX_SIGN_IN_CHECK_INTERVAL,
+    };
+    Instant::now() + wait
 }
 
 /// Counts a Host Agent as online while it exists.

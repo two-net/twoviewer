@@ -282,9 +282,13 @@ pub struct SignIn {
     /// How many networks are counted at once, so that counting takes bounded memory. While that
     /// many are, failures from other networks aren't counted.
     pub max_tracked_networks: usize,
-    /// How long a sign-in lasts at most (AUTH-09).
+    /// How long a sign-in lasts at most, however much it is used (AUTH-09). The sign-in cookie is
+    /// kept that long.
     #[serde(with = "humantime_serde")]
     pub session_lifetime: Duration,
+    /// How long a sign-in lasts without being used (AUTH-09).
+    #[serde(with = "humantime_serde")]
+    pub idle_timeout: Duration,
 }
 
 /// Operational logs (MNT-03), written to standard output.
@@ -422,6 +426,7 @@ impl Default for SignIn {
             max_failures_per_network: 50,
             max_tracked_networks: 100_000,
             session_lifetime: Duration::from_secs(30 * 24 * 60 * 60),
+            idle_timeout: Duration::from_secs(7 * 24 * 60 * 60),
         }
     }
 }
@@ -556,6 +561,7 @@ impl Config {
             ("sign_in.failure_window", self.sign_in.failure_window),
             ("sign_in.block_duration", self.sign_in.block_duration),
             ("sign_in.session_lifetime", self.sign_in.session_lifetime),
+            ("sign_in.idle_timeout", self.sign_in.idle_timeout),
         ] {
             if value < Duration::from_millis(1) {
                 return Err(ConfigError::TooShort { key });

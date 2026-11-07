@@ -1,7 +1,12 @@
 import { TestBed } from '@angular/core/testing';
 import { ConnectionBanner } from './connection-banner';
-import { ServerEvent } from './messages';
-import { CONNECT_TIMEOUT_MS, LOST_AFTER_MS, ServerConnection } from './server-connection';
+import { NOT_SIGNED_IN, ServerEvent } from './messages';
+import {
+  CONNECT_TIMEOUT_MS,
+  LOST_AFTER_MS,
+  ServerConnection,
+  SignedOutReason,
+} from './server-connection';
 import { FakeSocket, FakeSockets, provideFakeSockets } from './testing';
 
 const HELLO = { type: 'hello', heartbeatTimeoutMs: 8000 } as const;
@@ -203,6 +208,50 @@ describe('ServerConnection', () => {
     expect(sockets.opened.length).toBe(1);
     expect(connection.state()).toBe('idle');
     expect(connection.lost()).toBe(false);
+  });
+
+  it('stops and reports it when the server says that the sign-in has ended', () => {
+    const reasons: SignedOutReason[] = [];
+    connection.signedOut.subscribe((reason) => reasons.push(reason));
+    const socket = connected();
+
+    socket.drop(NOT_SIGNED_IN);
+    vi.advanceTimersByTime(60_000);
+
+    expect(reasons).toEqual(['ended']);
+    // Reconnecting would only be closed again: the browser has to sign in first.
+    expect(sockets.opened.length).toBe(1);
+    expect(connection.state()).toBe('idle');
+    expect(connection.lost()).toBe(false);
+
+    // Started again once signed in.
+    connected();
+    expect(connection.state()).toBe('connected');
+  });
+
+  it('reports a browser that has no sign-in to start with', () => {
+    const reasons: SignedOutReason[] = [];
+    connection.signedOut.subscribe((reason) => reasons.push(reason));
+    connection.start();
+
+    // Before any hello.
+    sockets.last.drop(NOT_SIGNED_IN);
+    vi.advanceTimersByTime(60_000);
+
+    expect(reasons).toEqual(['none']);
+    expect(sockets.opened.length).toBe(1);
+  });
+
+  it('reconnects after any other close', () => {
+    const reasons: SignedOutReason[] = [];
+    connection.signedOut.subscribe((reason) => reasons.push(reason));
+    const socket = connected();
+
+    socket.drop(1012);
+    vi.advanceTimersByTime(500);
+
+    expect(sockets.opened.length).toBe(2);
+    expect(reasons).toEqual([]);
   });
 });
 

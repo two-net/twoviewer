@@ -1,0 +1,63 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+h3,
+p {
+  margin: 0;
+}
+
+.hint,
+.meta {
+  color: var(--color-text-muted);
+}
+
+.sign-ins {
+  align-self: stretch;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--color-border);
+}
+
+// The details beside the button, which goes below them in narrow windows (UI-07).
+.sign-in {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+  padding-block: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.client {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
+}
+
+.tag {
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  font-weight: 400;
+}
+
+app-skeleton,
+app-error-message {
+  align-self: stretch;
+}

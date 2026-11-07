@@ -8,6 +8,13 @@
 //!
 //! Every response tells browsers to use only HTTPS (SEC-01), and forbids other sites to frame
 //! the web client and scripts from other origins to run in it (SEC-10).
+//!
+//! Requests that may change something, which is any but `GET`, `HEAD` and `OPTIONS`, are refused
+//! with `403` (`cross_site_request`) when a browser says that another site started them
+//! ([`refuse_cross_site`]). With the `SameSite=Strict` sign-in cookie ([`crate::accounts`]), this
+//! keeps other sites from acting in a user's name (SEC-09), including sites that browsers count as
+//! the same site, such as other subdomains, and requests without a JSON body, which need no CORS
+//! preflight.
 
 use std::{
     net::SocketAddr,
@@ -18,14 +25,15 @@ use std::{
 use axum::{
     Router,
     extract::{ConnectInfo, FromRequestParts, MatchedPath, Request, State},
-    http::{HeaderName, HeaderValue, StatusCode, header, request::Parts},
+    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header, request::Parts},
     middleware::{self, Next},
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use sea_orm::prelude::Uuid;
 use tracing::{Instrument, info, info_span};
 
 use crate::{
+    api::ApiError,
     audit,
     metrics::{HttpLabels, Metrics, status_class},
     user_agent,
@@ -63,9 +71,53 @@ const CONTENT_SECURITY_POLICY: HeaderValue = HeaderValue::from_static(
 );
 
 /// The HTTPS listener's router: the routes of every feature, in `routes`, with correlation IDs,
-/// request logs, request metrics and the security headers.
+/// request logs, request metrics, the security headers, and cross-site requests refused.
 pub fn router(routes: Router, metrics: Arc<Metrics>, hsts_max_age: Duration) -> Router {
+    let routes = routes.layer(middleware::from_fn(refuse_cross_site));
     secure(instrument(routes, metrics), hsts_max_age)
+}
+
+/// Refuses requests that may change something when a browser says that another site, or another
+/// origin of this site, started them.
+///
+/// Browsers send `Sec-Fetch-Site` and `Origin` with such requests. A request without either
+/// doesn't come from a browser, such as one from a Host Agent, and so carries no cookie that a
+/// browser added on its own: no other site can have forged it.
+async fn refuse_cross_site(request: Request, next: Next) -> Response {
+    if may_change(request.method()) && !from_this_origin(request.headers()) {
+        return ApiError::Forbidden {
+            code: "cross_site_request",
+        }
+        .into_response();
+    }
+    next.run(request).await
+}
+
+/// Whether a request with `method` may change something. The others are safe (RFC 9110).
+fn may_change(method: &Method) -> bool {
+    !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+}
+
+/// Whether the browser headers in `headers`, if any, say that a page of this origin sent the
+/// request.
+fn from_this_origin(headers: &HeaderMap) -> bool {
+    let fetch_site = headers.get("sec-fetch-site");
+    if fetch_site.is_some_and(|site| site != "same-origin") {
+        return false;
+    }
+    !headers.contains_key(header::ORIGIN) || same_origin(headers)
+}
+
+/// Whether the request comes from a page served by this host, over HTTPS: its `Origin` is
+/// `https://` and its `Host`.
+pub fn same_origin(headers: &HeaderMap) -> bool {
+    let header = |name| headers.get(name).and_then(|value| value.to_str().ok());
+    let (Some(origin), Some(host)) = (header(header::ORIGIN), header(header::HOST)) else {
+        return false;
+    };
+    origin
+        .strip_prefix("https://")
+        .is_some_and(|origin| origin.eq_ignore_ascii_case(host))
 }
 
 /// Adds correlation IDs, request logs and request metrics to every route of `router`, and to its
@@ -184,7 +236,10 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    use axum::{body::Body, routing::get};
+    use axum::{
+        body::Body,
+        routing::{get, post},
+    };
     use tower::ServiceExt;
     use tracing_subscriber::fmt::MakeWriter;
 
@@ -353,6 +408,149 @@ mod tests {
             response.headers()[header::STRICT_TRANSPORT_SECURITY],
             "max-age=0; includeSubDomains"
         );
+    }
+
+    fn headers(origin: Option<&'static str>, host: Option<&'static str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        if let Some(origin) = origin {
+            headers.insert(header::ORIGIN, HeaderValue::from_static(origin));
+        }
+        if let Some(host) = host {
+            headers.insert(header::HOST, HeaderValue::from_static(host));
+        }
+        headers
+    }
+
+    #[test]
+    fn only_pages_of_this_host_over_https_are_the_same_origin() {
+        for (origin, host, same) in [
+            (
+                Some("https://twoviewer.example"),
+                Some("twoviewer.example"),
+                true,
+            ),
+            (Some("https://localhost:8443"), Some("localhost:8443"), true),
+            (
+                Some("https://TwoViewer.example"),
+                Some("twoviewer.example"),
+                true,
+            ),
+            (
+                Some("https://evil.example"),
+                Some("twoviewer.example"),
+                false,
+            ),
+            (
+                Some("http://twoviewer.example"),
+                Some("twoviewer.example"),
+                false,
+            ),
+            (
+                Some("https://twoviewer.example:8443"),
+                Some("twoviewer.example"),
+                false,
+            ),
+            (
+                Some("https://twoviewer.example.evil"),
+                Some("twoviewer.example"),
+                false,
+            ),
+            (Some("null"), Some("twoviewer.example"), false),
+            (None, Some("twoviewer.example"), false),
+            (Some("https://twoviewer.example"), None, false),
+        ] {
+            assert_eq!(
+                same_origin(&headers(origin, host)),
+                same,
+                "origin {origin:?}, host {host:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn requests_that_other_sites_start_cannot_change_anything() {
+        let router = Router::new()
+            .route("/", get(|| async { "read" }).post(|| async { "changed" }))
+            .route(
+                "/{id}",
+                post(|| async { "changed" }).delete(|| async { "deleted" }),
+            )
+            .layer(middleware::from_fn(refuse_cross_site));
+        let send = async |method: Method, uri: &str, browser: &[(&str, &'static str)]| {
+            let mut request = Request::builder()
+                .method(method)
+                .uri(uri)
+                .header(header::HOST, "twoviewer.example");
+            for (name, value) in browser {
+                request = request.header(*name, *value);
+            }
+            let response = router
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            let status = response.status();
+            (status, body(response).await)
+        };
+        let refused = (
+            StatusCode::FORBIDDEN,
+            r#"{"error":"cross_site_request"}"#.to_owned(),
+        );
+
+        for browser in [
+            &[("origin", "https://evil.example")][..],
+            &[("origin", "null")],
+            &[("origin", "http://twoviewer.example")],
+            &[("sec-fetch-site", "cross-site")],
+            // Another subdomain, which counts as the same site for `SameSite` cookies.
+            &[("sec-fetch-site", "same-site")],
+            &[("sec-fetch-site", "none")],
+            &[
+                ("sec-fetch-site", "cross-site"),
+                ("origin", "https://twoviewer.example"),
+            ],
+            &[
+                ("sec-fetch-site", "same-origin"),
+                ("origin", "https://evil.example"),
+            ],
+        ] {
+            assert_eq!(
+                send(Method::POST, "/", browser).await,
+                refused,
+                "{browser:?}"
+            );
+            assert_eq!(
+                send(Method::DELETE, "/1", browser).await,
+                refused,
+                "{browser:?}"
+            );
+            // Reading is not refused: other sites cannot see the answer.
+            assert_eq!(
+                send(Method::GET, "/", browser).await.0,
+                StatusCode::OK,
+                "{browser:?}"
+            );
+        }
+        for browser in [
+            &[][..],
+            &[("origin", "https://twoviewer.example")],
+            &[("sec-fetch-site", "same-origin")],
+            &[
+                ("sec-fetch-site", "same-origin"),
+                ("origin", "https://twoviewer.example"),
+            ],
+        ] {
+            assert_eq!(
+                send(Method::POST, "/", browser).await,
+                (StatusCode::OK, "changed".to_owned()),
+                "{browser:?}"
+            );
+            assert_eq!(
+                send(Method::DELETE, "/1", browser).await,
+                (StatusCode::OK, "deleted".to_owned()),
+                "{browser:?}"
+            );
+        }
     }
 
     /// A log destination that tests can read.

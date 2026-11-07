@@ -160,8 +160,12 @@ max_failures_per_network = 50
 # How many networks are counted at once, so that counting takes bounded memory. While that many
 # are, failures from other networks aren't counted.
 max_tracked_networks = 100000
-# How long a sign-in lasts at most (AUTH-09).
+# How long a sign-in lasts at most, however much it is used (AUTH-09). The sign-in cookie is kept
+# that long.
 session_lifetime = "30d"
+# How long a sign-in lasts without being used (AUTH-09). Last activity is recorded at most once a
+# minute, so a sign-in may end up to a minute early.
+idle_timeout = "7d"
 
 [log]
 # "json" (one object per line, for log collectors) or "text" (for development).

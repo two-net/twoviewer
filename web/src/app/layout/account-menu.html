@@ -12,4 +12,10 @@
 <div id="account-menu" class="panel" [class.open]="open()">
   <app-theme-picker />
   <a class="settings" routerLink="/settings" i18n>Settings</a>
+  <button type="button" class="sign-out" [disabled]="signingOut()" (click)="signOut()" i18n>
+    Sign out
+  </button>
+  @if (error(); as error) {
+    <app-error-message [error]="error" />
+  }
 </div>

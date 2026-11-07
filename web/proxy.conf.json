@@ -4,6 +4,8 @@
     "secure": false,
     "changeOrigin": true,
     "ws": true,
-    "rewriteWsOrigin": true
+    "headers": {
+      "origin": "https://localhost:8443"
+    }
   }
 }

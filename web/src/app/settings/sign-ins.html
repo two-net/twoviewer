@@ -1,0 +1,72 @@
+<h3 id="settings-sign-ins" i18n>Sign-ins</h3>
+<p class="hint" i18n>
+  The browsers signed in to your account. Sign out of any you don't recognize or no longer use.
+</p>
+@if (signIns(); as signIns) {
+  <ul class="sign-ins" aria-labelledby="settings-sign-ins">
+    @for (signIn of signIns; track signIn.id) {
+      <li class="sign-in">
+        <div class="details">
+          <p class="client">
+            <span>{{ signIn.client }}</span>
+            @if (signIn.current) {
+              <span class="tag" i18n="Marks the sign-in of the browser the user is using">
+                This browser
+              </span>
+            }
+          </p>
+          <p class="meta" i18n>
+            IP address
+            {{
+              signIn.ipAddress // i18n(ph="address")
+            }}
+          </p>
+          <p class="meta">
+            @if (signIn.current) {
+              <span i18n="Last activity of the sign-in of the browser the user is using">
+                Active now
+              </span>
+            } @else {
+              <span i18n>
+                Last active
+                {{
+                  signIn.lastActiveAt | localeDate // i18n(ph="time")
+                }}
+              </span>
+            }
+            <span aria-hidden="true"> · </span>
+            <span i18n
+              >Signed in
+              {{
+                signIn.signedInAt | localeDate: 'date' // i18n(ph="date")
+              }}</span
+            >
+          </p>
+        </div>
+        <button
+          type="button"
+          class="button"
+          [attr.aria-label]="signOutLabel(signIn)"
+          [disabled]="ending() !== null"
+          (click)="end(signIn)"
+          i18n="Button that ends a sign-in"
+        >
+          Sign out
+        </button>
+      </li>
+    }
+  </ul>
+  @if (othersCount() > 0) {
+    <button type="button" class="button" [disabled]="ending() !== null" (click)="endOthers()" i18n>
+      Sign out everywhere else
+    </button>
+  }
+} @else if (!loadError()) {
+  <app-skeleton [rows]="2" />
+}
+@if (loadError(); as error) {
+  <app-error-message [error]="error" />
+}
+@if (error(); as error) {
+  <app-error-message [error]="error" />
+}

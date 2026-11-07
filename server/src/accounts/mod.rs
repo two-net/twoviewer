@@ -29,6 +29,31 @@
 //! [`sign_in::sign_in`] says what it does in detail. Handlers that need a signed-in user take
 //! [`SignedIn`], which reads the cookie ([`signed_in`]).
 //!
+//! # Sign-ins
+//!
+//! A sign-in ends after `sign_in.idle_timeout` (7 days) without use, and at the latest
+//! `sign_in.session_lifetime` (30 days) after sign-in (AUTH-09, [`sign_in_session`]). The user
+//! manages theirs ([`sign_ins`]):
+//!
+//! - `GET /api/sign-ins` lists the active ones: browser and operating system, IP address, when
+//!   they started and were last used, and which is the one of the request.
+//! - `DELETE /api/sign-ins/{id}` revokes one. It answers `204`, or `410` for one that has ended or
+//!   isn't the user's.
+//! - `DELETE /api/sign-ins` revokes all but the one of the request, and answers `204`.
+//! - `POST /api/sign-out` ends the one of the request, and answers `204` with a cookie that
+//!   removes it, also when it had already ended.
+//!
+//! **Revoking all of a user's sign-ins.** Password reset (AUTH-07, #28), account deletion
+//! (AUTH-14, #30) and suspension (OPS-03, #68) do this, in the transaction of their change:
+//!
+//! ```ignore
+//! sign_in_session::revoke(&txn, user_id, Revoke::All, Action::SignInSessionRevoked, actor, correlation_id)
+//!     .await?;
+//! ```
+//!
+//! It records an audit event per sign-in, and closes their browsers' real-time connections once
+//! the transaction commits.
+//!
 //! # Passwords
 //!
 //! [`password::Passwords`] holds the rules for new passwords (AUTH-03, AUTH-04) and the only way
@@ -75,6 +100,7 @@ mod limits;
 pub mod password;
 mod sign_in;
 pub mod sign_in_session;
+mod sign_ins;
 mod sign_up;
 pub mod signed_in;
 pub mod token;
@@ -86,12 +112,12 @@ use std::sync::Arc;
 use axum::{
     Router,
     extract::FromRef,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use sea_orm::DatabaseConnection;
 
 pub use self::signed_in::{Authenticator, SignedIn};
-use self::{limits::Limits, password::Passwords};
+use self::{limits::Limits, password::Passwords, sign_in_session::Lifetime};
 use crate::{
     config::{self, PublicUrl},
     email::Mailer,
@@ -107,6 +133,12 @@ pub const VERIFY_EMAIL_PATH: &str = "/api/verify-email";
 pub const SIGN_IN_PATH: &str = "/api/sign-in";
 /// The path of the signed-in user's account in the API.
 pub const ACCOUNT_PATH: &str = "/api/account";
+/// The path of the signed-in user's sign-ins in the API.
+pub const SIGN_INS_PATH: &str = "/api/sign-ins";
+/// The path of one of the signed-in user's sign-ins in the API.
+pub const SIGN_INS_ITEM_PATH: &str = "/api/sign-ins/{id}";
+/// The path of sign-out in the API.
+pub const SIGN_OUT_PATH: &str = "/api/sign-out";
 
 /// The pages of the web client that emails link to (`web/src/app/app.routes.ts`).
 const VERIFY_EMAIL_PAGE: &str = "/verify-email";
@@ -123,6 +155,8 @@ pub struct Accounts {
     config: config::Accounts,
     sign_up: config::SignUp,
     sign_in: config::SignIn,
+    /// How long sign-ins last.
+    lifetime: Lifetime,
     limits: Limits,
     metrics: Arc<Metrics>,
 }
@@ -145,6 +179,7 @@ impl Accounts {
             config: config.accounts.clone(),
             sign_up: config.sign_up.clone(),
             sign_in: config.sign_in.clone(),
+            lifetime: Lifetime::new(&config.sign_in),
             limits: Limits::new(&config.sign_up, &config.sign_in),
             metrics,
         })
@@ -158,6 +193,12 @@ impl Accounts {
             .route(VERIFY_EMAIL_PATH, post(verify_email::verify_email))
             .route(SIGN_IN_PATH, post(sign_in::sign_in))
             .route(ACCOUNT_PATH, get(account::account))
+            .route(
+                SIGN_INS_PATH,
+                get(sign_ins::list).delete(sign_ins::revoke_others),
+            )
+            .route(SIGN_INS_ITEM_PATH, delete(sign_ins::revoke))
+            .route(SIGN_OUT_PATH, post(sign_ins::sign_out))
             .with_state(self.clone())
     }
 
@@ -173,6 +214,6 @@ impl Accounts {
 
 impl FromRef<Arc<Accounts>> for Authenticator {
     fn from_ref(accounts: &Arc<Accounts>) -> Self {
-        Authenticator::new(accounts.db.clone())
+        Authenticator::new(accounts.db.clone(), accounts.lifetime)
     }
 }

@@ -1,7 +1,10 @@
+import { provideHttpClient } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Component } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { RouterOutlet, provideRouter } from '@angular/router';
+import { Router, RouterOutlet, provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
+import { provideFakeSockets } from '../shared/connection/testing';
 import { AccountMenu } from './account-menu';
 
 @Component({
@@ -31,7 +34,11 @@ describe('AccountMenu', () => {
               { path: 'settings', component: Screen },
             ],
           },
+          { path: 'sign-in', component: Screen },
         ]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideFakeSockets(),
       ],
     });
     harness = await RouterTestingHarness.create('/devices');
@@ -48,6 +55,14 @@ describe('AccountMenu', () => {
   async function toggle(): Promise<void> {
     button.click();
     await harness.fixture.whenStable();
+  }
+
+  /** Lets the menu handle a response, which takes a few turns of promises. */
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 5; i++) {
+      await new Promise((resolve) => setTimeout(resolve));
+      await harness.fixture.whenStable();
+    }
   }
 
   function isOpen(): boolean {
@@ -69,6 +84,37 @@ describe('AccountMenu', () => {
   it('offers the theme and a link to Settings (THM-08)', () => {
     expect(panel.querySelector('app-theme-picker legend')?.textContent?.trim()).toBe('Theme');
     expect(panel.querySelector('a')?.getAttribute('href')).toBe('/settings');
+  });
+
+  it('signs out, then goes to the sign-in page', async () => {
+    const server = TestBed.inject(HttpTestingController);
+    await toggle();
+    const signOut = panel.querySelector<HTMLButtonElement>('button.sign-out')!;
+    expect(signOut.textContent?.trim()).toBe('Sign out');
+
+    signOut.click();
+    await harness.fixture.whenStable();
+    expect(signOut.disabled).toBe(true);
+    server.expectOne('/api/sign-out').flush(null, { status: 204, statusText: 'No Content' });
+    await settle();
+
+    expect(TestBed.inject(Router).url).toBe('/sign-in');
+    server.verify();
+  });
+
+  it('says so when signing out fails, and stays signed in', async () => {
+    const server = TestBed.inject(HttpTestingController);
+    await toggle();
+
+    panel.querySelector<HTMLButtonElement>('button.sign-out')!.click();
+    server
+      .expectOne('/api/sign-out')
+      .error(new ProgressEvent('error'), { status: 0, statusText: 'Unknown Error' });
+    await settle();
+
+    expect(TestBed.inject(Router).url).toBe('/devices');
+    expect(panel.querySelector('[role=alert]')?.textContent).toContain("can't be reached");
+    expect(panel.querySelector<HTMLButtonElement>('button.sign-out')!.disabled).toBe(false);
   });
 
   it('stays open while the theme is chosen', async () => {

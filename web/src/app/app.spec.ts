@@ -1,4 +1,6 @@
 import { Location } from '@angular/common';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideLocationMocks } from '@angular/common/testing';
 import { TestBed } from '@angular/core/testing';
 import { Title } from '@angular/platform-browser';
@@ -17,6 +19,9 @@ describe('App', () => {
         provideLocationMocks(),
         { provide: TitleStrategy, useClass: PageTitle },
         provideFakeSockets(),
+        // Screens that load data, such as Settings, ask the testing backend, which never answers.
+        provideHttpClient(),
+        provideHttpClientTesting(),
       ],
     });
   });

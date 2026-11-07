@@ -83,13 +83,15 @@ Style with the color tokens in [`src/styles.scss`](src/styles.scss) (`var(--colo
 
 The messages are described in [`protocol/src/lib.rs`](../protocol/src/lib.rs), and copied in `messages.ts`.
 
-After every interruption, it reconnects with randomized, increasing delays (REL-05): between half and all of 1, 2, 4, … seconds, at most 30. It reconnects at once when the browser is back online or the tab is shown again. When the connection has been down for 2 seconds, `<app-connection-banner>` at the top of every page says so, without blocking anything (UI-05); a restart of the server reconnects faster and doesn't show it. These numbers are constants, like the toast duration, until the web client gets settings from the server.
+The server accepts the connection only with an active sign-in. When the browser has none, or its sign-in is revoked or expires, the server closes it with code 4001 (`NOT_SIGNED_IN`). The connection then stops instead of reconnecting, and `signedOut` fires, upon which `AppLayout` goes to the sign-in page. If the sign-in ended while connected, a toast says that the user was signed out.
+
+After every other interruption, it reconnects with randomized, increasing delays (REL-05): between half and all of 1, 2, 4, … seconds, at most 30. It reconnects at once when the browser is back online or the tab is shown again. When the connection has been down for 2 seconds, `<app-connection-banner>` at the top of every page says so, without blocking anything (UI-05); a restart of the server reconnects faster and doesn't show it. These numbers are constants, like the toast duration, until the web client gets settings from the server.
 
 In specs, `provideFakeSockets()` from `shared/connection/testing.ts` replaces the WebSocket with fakes on which the spec plays the server. Specs that render `AppLayout` need it.
 
 ### With the development server
 
-`npm start` proxies `/api`, including the WebSocket, to the server on `https://localhost:8443` ([`proxy.conf.json`](proxy.conf.json)), so start the server side first ([`../README.md`](../README.md#running-the-server-side)). The proxy accepts the self-signed certificate, and rewrites the `Origin` of WebSocket handshakes to the server's own, which the server requires. Without the server, the banner shows that the connection is lost.
+`npm start` proxies `/api`, including the WebSocket, to the server on `https://localhost:8443` ([`proxy.conf.json`](proxy.conf.json)), so start the server side first ([`../README.md`](../README.md#running-the-server-side)). The proxy accepts the self-signed certificate, and sends the server's own `Origin` with every request, which the server requires of WebSocket handshakes and of requests that change something ([forged requests](../server/README.md#forged-requests)). It passes on the browser's `Sec-Fetch-Site`, which the server checks too. Without the server, the banner shows that the connection is lost.
 
 Signing in sets a `Secure` cookie, which a browser keeps on `http://localhost` only if it treats `localhost` as secure, as Chrome and Edge do. If signing in doesn't stick in your browser with `npm start`, use one of those.
 
@@ -105,6 +107,8 @@ The screens are in `src/app/accounts/`.
 - **Proof of work** (AUTH-15). When a network has signed up often, the server answers `428` with a challenge. `ProofOfWork` solves it in a web worker, `proof-of-work.worker.ts`, so that the page stays responsive, and the page sends the sign-up again with the solution. The worker imports only `proof-of-work-solver.ts`, without Angular, to stay small, and is type-checked with `tsconfig.worker.json`. Specs replace `ProofOfWork`, since jsdom has no workers.
 - **Verify your email address** (AUTH-02) is where the link in the email leads: `/verify-email#<token>`. The token is in the fragment, which browsers never send to a server. The page takes it out of the address bar, then sends it to the server.
 - **Sign in** (AUTH-05) sends the email address and password, and goes to the devices once the server has set the sign-in cookie, which page scripts can't read. A wrong password and an address without an account get the same answer (SEC-14), so the page says only that one of the two is wrong. After too many failed attempts with an address, the server blocks it for a while (AUTH-08), and the page says until when, from `Retry-After` (`shared/errors/retry-after.ts`). The account pages share the form styles in `account-form.scss`.
+- **Sign out** is in the *Account* menu. `SignOut` (`sign-out.ts`) asks the server to end the sign-in and remove its cookie, then stops the real-time connection and goes to the sign-in page. It does the same, with a toast, when the server ends the sign-in itself: when it is revoked from another browser, or expires after a week unused or a month at most (AUTH-09).
+- **Sign-ins** (AUTH-09) are in Settings → Security (`settings/sign-ins.ts`): each browser signed in to the account, with its IP address and last activity, this browser first. The user can sign out of any of them, or of all but this browser after confirming. The list reloads on `sign_ins.changed`, which the server sends when a sign-in starts or ends. A sign-in that has already ended answers `410`, upon which the list just reloads.
 
 ## Name and logo
 

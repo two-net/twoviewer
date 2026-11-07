@@ -3,233 +3,27 @@
 //! The account endpoints run in-process, with each request's client address chosen by the test.
 //! Needs Docker.
 
+mod accounts;
 mod common;
 
-use std::{
-    net::{IpAddr, SocketAddr},
-    sync::Arc,
-    time::Duration,
-};
+use std::time::Duration;
 
-use axum::{
-    Router,
-    body::Body,
-    extract::ConnectInfo,
-    http::{HeaderMap, Request, StatusCode, header},
-};
+use axum::http::{StatusCode, header};
 use chrono::Utc;
 use sea_orm::{
-    ActiveEnum, ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend,
-    EntityTrait, IntoActiveModel, QueryFilter, Set, Statement,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, IntoActiveModel,
+    QueryFilter, Set, Statement,
 };
 use serde_json::{Value, json};
-use testcontainers_modules::{postgres::Postgres, testcontainers::ContainerAsync};
-use tower::ServiceExt;
 use twoviewer_server::{
-    accounts::{
-        Accounts, legal,
-        password::{Password, Passwords},
-        sign_in_session, token, user,
-    },
+    accounts::{password::Passwords, token, user},
     audit::Action,
-    config::{self, PublicUrl},
-    db::{self, EmailAddress, migrate},
-    email::Mailer,
-    http,
-    metrics::Metrics,
-    throttle,
+    config, throttle,
 };
 
-use common::{
-    LOCK_TIMEOUT,
-    mailpit::{Mailpit, mailpit, wait_until},
-    postgres,
-};
+use accounts::{Answer, PASSWORD, app, cheap_hashes, create_user, elsewhere};
 
-const PASSWORD: &str = "violet otter harbor 92";
 const WRONG: &str = "violet otter harbor 93";
-const FIREFOX: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0";
-
-fn client() -> IpAddr {
-    "203.0.113.7".parse().unwrap()
-}
-
-fn elsewhere() -> IpAddr {
-    "198.51.100.20".parse().unwrap()
-}
-
-/// Settings that hash in well under a millisecond: these tests aren't about the cost.
-fn cheap_hashes(config: &mut config::Config) {
-    config.passwords.hash_memory_kib = 64;
-    config.passwords.hash_iterations = 1;
-}
-
-/// The account endpoints, with the database and Mailpit they use.
-struct App {
-    router: Router,
-    db: DatabaseConnection,
-    mailpit: Mailpit,
-    metrics: Arc<Metrics>,
-    /// Hashes passwords with the same settings as the server.
-    passwords: Passwords,
-    _postgres: ContainerAsync<Postgres>,
-}
-
-/// The answer to a request: its status, headers and body.
-#[derive(Debug)]
-struct Answer {
-    status: StatusCode,
-    headers: HeaderMap,
-    body: String,
-}
-
-impl Answer {
-    fn json(&self) -> Value {
-        serde_json::from_str(&self.body).unwrap()
-    }
-
-    /// The `name=value` of the cookie the answer sets.
-    fn cookie(&self) -> String {
-        let set_cookie = self.headers[header::SET_COOKIE].to_str().unwrap();
-        set_cookie.split(';').next().unwrap().to_owned()
-    }
-
-    fn retry_after(&self) -> u64 {
-        self.headers[header::RETRY_AFTER]
-            .to_str()
-            .unwrap()
-            .parse()
-            .unwrap()
-    }
-}
-
-async fn app(configure: impl FnOnce(&mut config::Config)) -> App {
-    let mut config = config::Config::default();
-    cheap_hashes(&mut config);
-    configure(&mut config);
-
-    let ((postgres, url), mailpit) = tokio::join!(postgres(), mailpit());
-    migrate::migrate(&url, LOCK_TIMEOUT).await.unwrap();
-    let db = db::connect(&url).await.unwrap();
-    let metrics = Arc::new(Metrics::new());
-    let mailer = Mailer::new(&mailpit.config(), None, metrics.clone()).unwrap();
-    let passwords = Passwords::new(&config.passwords).unwrap();
-    let accounts = Accounts::new(
-        db.clone(),
-        mailer,
-        passwords.clone(),
-        PublicUrl::parse("https://twoviewer.test").unwrap(),
-        &config,
-        metrics.clone(),
-    );
-    App {
-        router: http::router(accounts.routes(), metrics.clone(), Duration::ZERO),
-        db,
-        mailpit,
-        metrics,
-        passwords,
-        _postgres: postgres,
-    }
-}
-
-impl App {
-    async fn send(&self, mut request: Request<Body>, from: IpAddr) -> Answer {
-        request
-            .extensions_mut()
-            .insert(ConnectInfo(SocketAddr::new(from, 50_000)));
-        let response = self.router.clone().oneshot(request).await.unwrap();
-        let status = response.status();
-        let headers = response.headers().clone();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        Answer {
-            status,
-            headers,
-            body: String::from_utf8(bytes.to_vec()).unwrap(),
-        }
-    }
-
-    async fn sign_in_from(&self, email: &str, password: &str, from: IpAddr) -> Answer {
-        let body = json!({ "email": email, "password": password });
-        let request = Request::post("/api/sign-in")
-            .header(header::CONTENT_TYPE, "application/json")
-            .header(header::USER_AGENT, FIREFOX)
-            .body(Body::from(body.to_string()))
-            .unwrap();
-        self.send(request, from).await
-    }
-
-    async fn sign_in(&self, email: &str, password: &str) -> Answer {
-        self.sign_in_from(email, password, client()).await
-    }
-
-    /// `GET /api/account`, with `cookie` if there is one.
-    async fn account(&self, cookie: Option<&str>) -> Answer {
-        let mut request = Request::get("/api/account").header(header::USER_AGENT, FIREFOX);
-        if let Some(cookie) = cookie {
-            request = request.header(header::COOKIE, cookie);
-        }
-        self.send(request.body(Body::empty()).unwrap(), client())
-            .await
-    }
-
-    /// An account with `email` and [`PASSWORD`], unverified.
-    async fn create_user(&self, email: &str) -> user::Model {
-        create_user(&self.db, &self.passwords, email).await
-    }
-
-    /// The stored audit events of `action`, oldest first, as JSON objects.
-    async fn events(&self, action: Action) -> Vec<Value> {
-        let rows = self
-            .db
-            .query_all_raw(Statement::from_sql_and_values(
-                DbBackend::Postgres,
-                "SELECT to_jsonb(e) AS event FROM audit_event e WHERE action = $1 \
-                 ORDER BY occurred_at",
-                [action.to_value().into()],
-            ))
-            .await
-            .unwrap();
-        rows.iter()
-            .map(|row| row.try_get("", "event").unwrap())
-            .collect()
-    }
-
-    /// The emails sent to `address`, once `count` have arrived.
-    async fn emails(&self, address: &str, count: usize) -> Vec<Value> {
-        wait_until(&format!("{count} emails to {address}"), || async {
-            self.mailpit.messages_to(address).await.len() >= count
-        })
-        .await;
-        self.mailpit.messages_to(address).await
-    }
-
-    async fn sessions(&self) -> Vec<sign_in_session::Model> {
-        sign_in_session::Entity::find().all(&self.db).await.unwrap()
-    }
-
-    fn failed_metric(&self) -> u64 {
-        self.metrics.sign_ins_failed.get()
-    }
-}
-
-async fn create_user(db: &DatabaseConnection, passwords: &Passwords, email: &str) -> user::Model {
-    let now = Utc::now();
-    user::ActiveModel {
-        email: Set(EmailAddress::new(email)),
-        password_hash: Set(passwords.hash_new(&Password::new(PASSWORD)).await.unwrap()),
-        display_name: Set("Ann Lee".to_owned()),
-        accepted_terms_version: Set(legal::TERMS_VERSION.to_owned()),
-        accepted_privacy_version: Set(legal::PRIVACY_VERSION.to_owned()),
-        terms_accepted_at: Set(now),
-        created_at: Set(now),
-        ..Default::default()
-    }
-    .insert(db)
-    .await
-    .unwrap()
-}
 
 #[tokio::test]
 async fn sign_in_sets_a_cookie_that_identifies_the_user() {
@@ -263,9 +57,10 @@ async fn sign_in_sets_a_cookie_that_identifies_the_user() {
     assert_eq!(session.client_description, "Firefox on Linux");
     assert_eq!(session.revoked_at, None);
     assert_eq!(session.last_active_at, session.created_at);
+    // Unless it is used, it ends after a week (AUTH-09). The cookie lasts as long as a sign-in can.
     assert_eq!(
         session.expires_at - session.created_at,
-        chrono::Duration::days(30)
+        chrono::Duration::days(7)
     );
 
     // AUD-03.
