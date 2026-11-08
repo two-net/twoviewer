@@ -1,0 +1,15 @@
+{% extends "email/layout.txt" %}
+{%- block subject %}This email address already has a TwoViewer account{% endblock %}
+{%- block content -%}
+This address already has an account
+
+Someone, probably you, asked to change the email address of a TwoViewer account to this one. This address already has an account of its own, so nothing was changed.
+
+To use the account of this address, sign in with it:
+{{ sign_in_url }}
+
+If you don't remember its password, reset it:
+{{ reset_url }}
+
+If it wasn't you, you can ignore this email.
+{%- endblock %}

@@ -282,6 +282,7 @@ async fn checking_a_link_does_not_use_it() {
         &app.db,
         ann.id,
         Purpose::VerifyEmail,
+        None,
         Duration::from_secs(60),
     )
     .await

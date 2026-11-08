@@ -1,0 +1,12 @@
+{% extends "email/layout.txt" %}
+{%- block subject %}The email address of your TwoViewer account has changed{% endblock %}
+{%- block content -%}
+Your email address has changed
+
+The email address of your TwoViewer account was changed from this one to {{ new_email }}. From now on, sign in with the new address. Emails about your account go there too.
+
+If you made this change, there is nothing else to do.
+
+If you didn't, someone else may be able to sign in to your account. If you are still signed in to TwoViewer in a browser, change the address back in Settings, and change your password:
+{{ settings_url }}
+{%- endblock %}

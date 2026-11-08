@@ -1,0 +1,107 @@
+<div class="part">
+  <h3 id="settings-name" i18n>Name</h3>
+  <p class="hint" i18n>Shown to people you connect to and to you.</p>
+  @if (account()) {
+    <form [formGroup]="nameForm" (ngSubmit)="saveName()" novalidate class="form">
+      <div class="field">
+        <label for="settings-display-name" i18n>Name</label>
+        <input
+          id="settings-display-name"
+          class="input"
+          type="text"
+          formControlName="displayName"
+          autocomplete="name"
+          [attr.aria-invalid]="errorFor('displayName') ? 'true' : null"
+          [attr.aria-describedby]="errorFor('displayName') ? 'settings-display-name-error' : null"
+        />
+        @if (errorFor('displayName'); as message) {
+          <p id="settings-display-name-error" class="field-error">{{ message }}</p>
+        }
+      </div>
+      <div class="actions">
+        <button class="button button-primary" type="submit" [disabled]="busy() !== null" i18n>
+          Save name
+        </button>
+        <p class="status" role="status">
+          @if (busy() === 'displayName') {
+            <span class="spinner" aria-hidden="true"></span>
+            <span i18n>Saving…</span>
+          }
+        </p>
+      </div>
+    </form>
+    @if (nameError(); as error) {
+      <app-error-message [error]="error" />
+    }
+  } @else if (!loadError()) {
+    <app-skeleton [rows]="1" />
+  }
+</div>
+
+<div class="part">
+  <h3 id="settings-email" i18n>Email address</h3>
+  @if (account(); as account) {
+    <p class="state">
+      <strong class="address">{{ account.email }}</strong>
+      @if (!account.emailVerified) {
+        <span class="tag" i18n="The email address isn't verified">Not verified</span>
+      }
+    </p>
+    @if (!account.emailVerified) {
+      <p class="hint" i18n>
+        Open the link in the email we sent to this address to verify it. Until then, you can't pair
+        devices or start sessions.
+      </p>
+    }
+    @if (account.pendingEmail; as pending) {
+      <p class="pending" i18n>
+        Waiting for <strong class="address">{{ pending }}</strong
+        >: open the link in the email we sent there to make it your address. The link works for
+        {{ linkHours }} hours.
+      </p>
+    }
+    <form [formGroup]="emailForm" (ngSubmit)="changeEmail()" novalidate class="form">
+      <div class="field">
+        <label for="settings-new-email" i18n>New email address</label>
+        <p id="settings-new-email-hint" class="hint" i18n>
+          We'll email a link to the new address. Your address changes once you open it.
+        </p>
+        <input
+          id="settings-new-email"
+          class="input"
+          type="email"
+          formControlName="email"
+          autocomplete="email"
+          spellcheck="false"
+          [attr.aria-invalid]="errorFor('email') ? 'true' : null"
+          [attr.aria-describedby]="
+            'settings-new-email-hint' + (errorFor('email') ? ' settings-new-email-error' : '')
+          "
+        />
+        @if (errorFor('email'); as message) {
+          <p id="settings-new-email-error" class="field-error">{{ message }}</p>
+        }
+      </div>
+      <div class="actions">
+        <button class="button button-primary" type="submit" [disabled]="busy() !== null" i18n>
+          Send link
+        </button>
+        <p class="status" role="status">
+          @if (busy() === 'email') {
+            <span class="spinner" aria-hidden="true"></span>
+            <span i18n>Sending…</span>
+          }
+        </p>
+      </div>
+    </form>
+    @if (emailError(); as error) {
+      <app-error-message [error]="error" />
+    }
+  } @else if (!loadError()) {
+    <app-skeleton [rows]="2" />
+  }
+</div>
+
+@if (loadError(); as error) {
+  <app-error-message [error]="error" />
+}

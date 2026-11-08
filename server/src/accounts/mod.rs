@@ -30,6 +30,26 @@
 //! - `POST /api/password-reset/complete` sets the new password with the token from the link, and
 //!   revokes all of the account's sign-ins. It answers `204`, `410` or `422`.
 //!
+//! # Account settings
+//!
+//! Users change their display name, email address and password themselves (AUTH-11):
+//!
+//! - `PATCH /api/account` changes the display name ([`account::update`]). It answers `204`, or
+//!   `422`.
+//! - `POST /api/account/email` emails a link to a new address ([`change_email::request`]). It
+//!   needs a recent authentication, and answers `202`, the same whether or not the address has an
+//!   account, or `422` or `429`. `GET /api/account` shows the address as `pendingEmail` until the
+//!   link is used or expires.
+//! - `POST /api/account/email/confirm` changes the address with the token from the link
+//!   ([`change_email::confirm`]), and tells the old address. It answers `200` with the new
+//!   address, `409` if it has got an account since, or `410`.
+//! - `POST /api/account/password` changes the password, with the current one
+//!   ([`change_password::change_password`]), and signs out everywhere else. It needs a recent
+//!   authentication, and answers `204`, `422` or `429`.
+//!
+//! Each tells the user's browsers with the real-time event [`account::CHANGED_EVENT`] when the
+//! account changes, and the password change with that of revoked sign-ins.
+//!
 //! # Sign-in
 //!
 //! - `POST /api/sign-in` signs in with an email address and a password (AUTH-05). It answers `204`
@@ -141,8 +161,10 @@
 //! hides them, and they have no `Display`. Neither are the [tokens](token) of email links and
 //! sign-ins.
 
-mod account;
+pub mod account;
 pub mod challenge;
+mod change_email;
+mod change_password;
 pub mod compromised;
 pub mod email_link;
 pub mod legal;
@@ -188,6 +210,12 @@ pub const VERIFY_EMAIL_PATH: &str = "/api/verify-email";
 pub const SIGN_IN_PATH: &str = "/api/sign-in";
 /// The path of the signed-in user's account in the API.
 pub const ACCOUNT_PATH: &str = "/api/account";
+/// The path that emails a link to change the signed-in user's email address in the API.
+pub const ACCOUNT_EMAIL_PATH: &str = "/api/account/email";
+/// The path that changes an email address with the link from that email in the API.
+pub const ACCOUNT_EMAIL_CONFIRM_PATH: &str = "/api/account/email/confirm";
+/// The path that changes the signed-in user's password in the API.
+pub const ACCOUNT_PASSWORD_PATH: &str = "/api/account/password";
 /// The path of the signed-in user's sign-ins in the API.
 pub const SIGN_INS_PATH: &str = "/api/sign-ins";
 /// The path of one of the signed-in user's sign-ins in the API.
@@ -215,6 +243,8 @@ pub const MFA_CONFIRM_PATH: &str = "/api/mfa/confirm";
 const VERIFY_EMAIL_PAGE: &str = "/verify-email";
 const SIGN_IN_PAGE: &str = "/sign-in";
 const RESET_PASSWORD_PAGE: &str = "/reset-password";
+const CONFIRM_EMAIL_PAGE: &str = "/confirm-email";
+const SETTINGS_PAGE: &str = "/settings";
 
 /// What the account endpoints share.
 pub struct Accounts {
@@ -237,7 +267,8 @@ pub struct Accounts {
 }
 
 impl Accounts {
-    /// Uses the `accounts`, `sign_up`, `sign_in`, `mfa` and `password_reset` sections of `config`.
+    /// Uses the `accounts`, `sign_up`, `sign_in`, `mfa`, `password_reset` and `email_change`
+    /// sections of `config`.
     pub fn new(
         db: DatabaseConnection,
         mailer: Mailer,
@@ -259,7 +290,12 @@ impl Accounts {
             password_reset: config.password_reset.clone(),
             mfa_cipher: Cipher::new(mfa_encryption_key),
             lifetime: Lifetime::new(&config.sign_in),
-            limits: Limits::new(&config.sign_up, &config.sign_in, &config.password_reset),
+            limits: Limits::new(
+                &config.sign_up,
+                &config.sign_in,
+                &config.password_reset,
+                &config.email_change,
+            ),
             metrics,
         })
     }
@@ -279,7 +315,13 @@ impl Accounts {
                 post(sign_in_second_factor::second_factor),
             )
             .route(REAUTHENTICATE_PATH, post(reauthenticate::reauthenticate))
-            .route(ACCOUNT_PATH, get(account::account))
+            .route(ACCOUNT_PATH, get(account::account).patch(account::update))
+            .route(ACCOUNT_EMAIL_PATH, post(change_email::request))
+            .route(ACCOUNT_EMAIL_CONFIRM_PATH, post(change_email::confirm))
+            .route(
+                ACCOUNT_PASSWORD_PATH,
+                post(change_password::change_password),
+            )
             .route(
                 SIGN_INS_PATH,
                 get(sign_ins::list).delete(sign_ins::revoke_others),

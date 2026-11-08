@@ -264,6 +264,38 @@ It doesn't sign in. The user signs in with the new password, and with MFA on, wi
 
 **Still to come.** The email that says the password was reset (AUTH-12, #32).
 
+## Account settings
+
+Users change their display name, email address and password in the web client's settings (AUTH-11). The code is in [`src/accounts/account.rs`](src/accounts/account.rs), [`change_email.rs`](src/accounts/change_email.rs) and [`change_password.rs`](src/accounts/change_password.rs), and the settings are in `[email_change]`.
+
+| Request | Answers |
+|---|---|
+| `GET /api/account` | as under [Sign-in](#sign-in), and `pendingEmail` while a change of address waits for its link |
+| `PATCH /api/account` with `displayName` | `204`; `422` for a name that breaks the rules of sign-up; `401` |
+| `POST /api/account/email` with `email` | `202`, whether or not the address has an account; `422` for something that isn't an address, or the current one (`unchanged`); `429` with `Retry-After` when the account has asked too often; `428` ([Re-authentication](#re-authentication)); `401` |
+| `POST /api/account/email/confirm` with the `token` from the link | `200` with the account's new `email`; `410` (`link_expired`) for a link that has been used or has expired, or doesn't exist; `409` (`email_in_use`) when the address has got an account of its own since |
+| `POST /api/account/password` with `currentPassword` and `newPassword` | `204`; `422` for a missing or `incorrect` current password, or a new one that breaks the [rules](#passwords); `429` with `Retry-After` while passwords for the account are blocked; `428`; `401` |
+
+**The display name** changes at once, with the rules of sign-up, and needs no recent authentication: it is shown to others, but doesn't let anyone in.
+
+**The email address** changes only once the new one is verified. Asking for a change needs a recent authentication, and emails a link to the new address: `<http.public_url>/confirm-email#<token>`, valid for `accounts.verification_link_lifetime` (24 hours) and used once, with the token in the fragment and stored only as a hash, as for [email verification](#sign-up). Only the newest change can happen: asking again uses up the earlier links. The link needs no sign-in, since it may be opened on another device. Opening it:
+
+- changes the address, which stays unique regardless of case (DB-13), and marks it verified. If the address has got an account since the link was sent, it answers `409` and nothing changes;
+- uses up every link of the account, of every purpose. They went to the old address, and whoever reads its mail must not be able to use them afterwards: a reset link would otherwise set the password of the account at its new address;
+- emails the old address that the address has changed, and to what, if the old address was verified. One that never was may belong to someone else.
+
+Opening the link again answers `200` while the account has that address, since email scanners often open links before people do. Sign-ins stay: the address isn't a credential on its own.
+
+**Not revealing who has an account.** Being signed in doesn't tell anyone which addresses are registered, as for sign-up (SEC-14). Asking to change to an address that has an account answers `202` too, stores a link that shows as `pendingEmail`, records the same audit event, and counts toward the same limit. Only that link is never sent: the address gets an email saying that it already has an account, with links to sign in and to reset its password.
+
+**The password** changes with the current one, as well as a recent authentication, which with MFA on includes a code. A wrong current password counts toward the same block as failed sign-ins with the address (AUTH-08), as at re-authentication, so a stolen sign-in cookie gives no more guesses; a block that it starts is audited and emailed as at sign-in. Then, in one transaction, the new password's hash is stored, every other sign-in of the account is revoked, which closes their browsers' real-time connections, and its pending sign-ins, which were started with the old password, are deleted. The sign-in of the request stays.
+
+**Abuse.** Each request to change the address emails the new one, so an account may ask at most `email_change.max_per_account` (5) times within `email_change.window` (1 hour); further requests answer `429` with `Retry-After` until the window has moved on. The counts are kept in memory by each instance, like the [password reset](#password-reset) limits. Links carry a 256-bit token, which cannot be guessed, so confirming needs no limit of its own.
+
+**Audit.** Changing the display name records `display_name_changed`, unless the name is the same. Every request to change the address records `email_change_requested`, also when refused for the limit (reason `too_many_requests`); confirming records `email_change_completed`, and `email_verified` if the account wasn't verified yet. Changing the password records `password_changed`, also when the current password is wrong (`invalid_credentials`) or blocked (`blocked`), and `sign_in_session_revoked` for each sign-in that ends. All are by the account's owner, and none contain the names or addresses, which users read in their own audit events (AUD-07): the details must not say whether an address was taken. Each change also tells the user's browsers (`account.changed`, or `sign_ins.changed`), so that open settings reload.
+
+**Still to come.** The email that says the password was changed (AUTH-12, #32).
+
 ## Passwords
 
 Sign-up, password change and password reset check new passwords against the same rules, and store only their hashes. The code is in [`src/accounts/password.rs`](src/accounts/password.rs), and the settings are in `[passwords]`.

@@ -1,0 +1,11 @@
+{% extends "email/layout.html" %}
+{%- import "email/button.html" as button %}
+{%- block content -%}
+{%- let accent = crate::email::palette::ACCENT %}
+<h1>Confirm your new email address</h1>
+<p>Someone, probably you, asked to change the email address of a TwoViewer account to this one. To confirm that it is yours, use this button:</p>
+{% call button::button(link) %}Confirm email address{% endcall %}
+<p>The button works once, for {{ validity }} {% if in_hours %}{{ validity|pluralize("hour", "hours") }}{% else %}{{ validity|pluralize("minute", "minutes") }}{% endif %}. Until then, the account keeps its current address.</p>
+<p>If the button doesn't work, copy this address into your browser:<br><a class="tv-link" href="{{ link }}" style="color:{{ accent.light }};">{{ link }}</a></p>
+<p>If you didn't ask for this, you can ignore this email. Nothing changes.</p>
+{%- endblock %}

@@ -1,0 +1,50 @@
+// The parts are well apart, like the parts of the other sections.
+:host {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.part {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+h3,
+p {
+  margin: 0;
+}
+
+.form {
+  align-self: stretch;
+  margin-bottom: 0;
+}
+
+.state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.tag {
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+}
+
+// A change of address waiting for its link, set apart from the rest of the part.
+.pending {
+  align-self: stretch;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+app-skeleton,
+app-error-message {
+  align-self: stretch;
+}

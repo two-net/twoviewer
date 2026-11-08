@@ -1,14 +1,19 @@
-//! Single-use links sent by email (EmailLink in §5.2): the ones that verify an address (AUTH-02)
-//! and reset a password (AUTH-07).
+//! Single-use links sent by email (EmailLink in §5.2): the ones that verify an address (AUTH-02),
+//! reset a password (AUTH-07) and change the address (AUTH-11).
 //!
 //! A link carries a random [`Token`]. The database stores only its hash (SEC-07,
 //! [`super::token`]), so a copy of the database cannot be used to open links. Links are kept for
 //! 24 hours after use or expiry, then deleted by the retention job (Table 5.3-A, #66).
+//!
+//! Links go to the account's address, except those that change it, which go to the new one. So
+//! changing the address uses up every link the account has ([`use_up`]): whoever reads the old
+//! address's mail must not be able to use them afterwards.
 
 use chrono::Utc;
 use sea_orm::{ActiveModelTrait, ConnectionTrait, DbErr, Set, entity::prelude::*};
 
 pub use super::token::{TOKEN_LENGTH as MAX_TOKEN_LENGTH, Token, hash};
+use crate::db::EmailAddress;
 
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -27,6 +32,10 @@ pub struct Model {
     #[sea_orm(unique)]
     pub token_hash: Vec<u8>,
     pub expires_at: DateTimeUtc,
+    /// The address a [`Purpose::ChangeEmail`] link changes the account's to, and verifies; `None`
+    /// for other links. Lowercase, like the account's (DB-13).
+    #[sea_orm(extra = "CHECK (new_email = lower(new_email))")]
+    pub new_email: Option<EmailAddress>,
     /// When the link was used; `None` until then.
     pub used_at: Option<DateTimeUtc>,
     #[sea_orm(default_expr = "Expr::current_timestamp()")]
@@ -49,15 +58,20 @@ pub enum Purpose {
     VerifyEmail,
     /// Sets a new password for an account whose password was forgotten (AUTH-07).
     ResetPassword,
+    /// Changes the address of an account to its `new_email`, which it verifies (AUTH-11).
+    ChangeEmail,
 }
 
 /// Stores a new link for `purpose` to `user_id`, valid for `lifetime`, and returns its token.
+/// `new_email` is the new address of a [`Purpose::ChangeEmail`] link, and `None` for others.
 pub async fn create<C: ConnectionTrait>(
     db: &C,
     user_id: Uuid,
     purpose: Purpose,
+    new_email: Option<EmailAddress>,
     lifetime: std::time::Duration,
 ) -> Result<Token, DbErr> {
+    debug_assert_eq!(new_email.is_some(), purpose == Purpose::ChangeEmail);
     let token = Token::generate();
     let lifetime = chrono::Duration::from_std(lifetime).unwrap_or(chrono::Duration::MAX);
     ActiveModel {
@@ -65,9 +79,31 @@ pub async fn create<C: ConnectionTrait>(
         purpose: Set(purpose),
         token_hash: Set(token.hash()),
         expires_at: Set(Utc::now() + lifetime),
+        new_email: Set(new_email),
         ..Default::default()
     }
     .insert(db)
     .await?;
     Ok(token)
+}
+
+/// Marks `user_id`'s unused links for `purpose` as used, or all of them for `None`, so that none
+/// of them works any more.
+pub async fn use_up<C: ConnectionTrait>(
+    db: &C,
+    user_id: Uuid,
+    purpose: Option<Purpose>,
+) -> Result<(), DbErr> {
+    let mut query = Entity::update_many()
+        .set(ActiveModel {
+            used_at: Set(Some(Utc::now())),
+            ..Default::default()
+        })
+        .filter(Column::UserId.eq(user_id))
+        .filter(Column::UsedAt.is_null());
+    if let Some(purpose) = purpose {
+        query = query.filter(Column::Purpose.eq(purpose));
+    }
+    query.exec(db).await?;
+    Ok(())
 }

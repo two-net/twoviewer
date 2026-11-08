@@ -1,6 +1,6 @@
 //! Limits per network, kept in memory: how often one network may sign up (AUTH-15), fail to sign
-//! in (SEC-08) and ask for password resets (SEC-08); and how often sign-ups and password resets
-//! may email one address.
+//! in (SEC-08) and ask for password resets (SEC-08); how often sign-ups and password resets may
+//! email one address; and how often one account may ask to change its email address (AUTH-11).
 //!
 //! They are counted by each instance of the server on its own. With several instances behind a
 //! load balancer (CAP-03), a network can do that many times more before it is challenged or
@@ -15,6 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use sea_orm::prelude::Uuid;
 use sha2::{Digest, Sha256};
 
 use crate::{config, db::EmailAddress};
@@ -52,12 +53,15 @@ pub struct Limits {
     sign_up: config::SignUp,
     sign_in: config::SignIn,
     password_reset: config::PasswordReset,
+    email_change: config::EmailChange,
     /// Sign-ups per network.
-    sign_ups: Windows,
+    sign_ups: Windows<Network>,
     /// Failed sign-ins per network.
-    sign_in_failures: Windows,
+    sign_in_failures: Windows<Network>,
     /// Password reset requests per network.
-    reset_requests: Windows,
+    reset_requests: Windows<Network>,
+    /// Email change requests per account.
+    email_changes: Windows<Uuid>,
     /// When sign-up last emailed each address.
     sign_up_notices: Notices,
     /// When password reset last emailed each address.
@@ -96,29 +100,29 @@ impl<K: Eq + std::hash::Hash, V> Counts<K, V> {
 /// its size, so it isn't done for every request.
 const FULL_PRUNE_INTERVAL: Duration = Duration::from_secs(1);
 
-/// The times of events per network within a sliding `window`, such as sign-ups, for at most
-/// `max_tracked` networks at once.
-struct Windows {
+/// The times of events per key within a sliding `window`, such as sign-ups per network, for at
+/// most `max_tracked` keys at once.
+struct Windows<K> {
     window: Duration,
     max_tracked: usize,
-    networks: Mutex<Counts<Network, VecDeque<Instant>>>,
+    keys: Mutex<Counts<K, VecDeque<Instant>>>,
 }
 
-impl Windows {
+impl<K: Copy + Eq + std::hash::Hash> Windows<K> {
     fn new(window: Duration, max_tracked: usize) -> Self {
         Self {
             window,
             max_tracked,
-            networks: Mutex::new(Counts::new()),
+            keys: Mutex::new(Counts::new()),
         }
     }
 
-    /// Runs `f` on the events of `network` within the window at `now`, oldest first, which it may
-    /// add to. Returns `None` without running it when the table is full and `network` isn't in it,
-    /// even after the networks without recent events have been removed.
+    /// Runs `f` on the events of `key` within the window at `now`, oldest first, which it may add
+    /// to. Returns `None` without running it when the table is full and `key` isn't in it, even
+    /// after the keys without recent events have been removed.
     fn update<R>(
         &self,
-        network: Network,
+        key: K,
         now: Instant,
         f: impl FnOnce(&mut VecDeque<Instant>) -> R,
     ) -> Option<R> {
@@ -128,15 +132,15 @@ impl Windows {
                 .back()
                 .is_none_or(|last| now.saturating_duration_since(*last) >= window)
         };
-        let mut networks = self.networks.lock().expect("never poisoned");
-        networks.prune(now, window, expired);
-        if !networks.entries.contains_key(&network) && networks.entries.len() >= self.max_tracked {
-            networks.prune(now, FULL_PRUNE_INTERVAL, expired);
-            if networks.entries.len() >= self.max_tracked {
+        let mut keys = self.keys.lock().expect("never poisoned");
+        keys.prune(now, window, expired);
+        if !keys.entries.contains_key(&key) && keys.entries.len() >= self.max_tracked {
+            keys.prune(now, FULL_PRUNE_INTERVAL, expired);
+            if keys.entries.len() >= self.max_tracked {
                 return None;
             }
         }
-        let events = networks.entries.entry(network).or_default();
+        let events = keys.entries.entry(key).or_default();
         while events
             .front()
             .is_some_and(|first| now.saturating_duration_since(*first) >= window)
@@ -146,11 +150,11 @@ impl Windows {
         Some(f(events))
     }
 
-    /// How many events `network` had within the window at `now`, and how long until the oldest of
-    /// them leaves it. It changes nothing.
-    fn count(&self, network: Network, now: Instant) -> (usize, Duration) {
-        let networks = self.networks.lock().expect("never poisoned");
-        let Some(events) = networks.entries.get(&network) else {
+    /// How many events `key` had within the window at `now`, and how long until the oldest of them
+    /// leaves it. It changes nothing.
+    fn count(&self, key: K, now: Instant) -> (usize, Duration) {
+        let keys = self.keys.lock().expect("never poisoned");
+        let Some(events) = keys.entries.get(&key) else {
             return (0, Duration::ZERO);
         };
         let mut recent = events
@@ -211,17 +215,22 @@ impl Limits {
         sign_up: &config::SignUp,
         sign_in: &config::SignIn,
         password_reset: &config::PasswordReset,
+        email_change: &config::EmailChange,
     ) -> Self {
         Self {
             sign_up: sign_up.clone(),
             sign_in: sign_in.clone(),
             password_reset: password_reset.clone(),
+            email_change: email_change.clone(),
             sign_ups: Windows::new(sign_up.window, sign_up.max_tracked_networks),
             sign_in_failures: Windows::new(sign_in.failure_window, sign_in.max_tracked_networks),
             reset_requests: Windows::new(
                 password_reset.window,
                 password_reset.max_tracked_networks,
             ),
+            // Each entry follows a recent re-authentication, which takes a password hash, so
+            // that limits how fast they come, as for `Notices`.
+            email_changes: Windows::new(email_change.window, usize::MAX),
             sign_up_notices: Notices::new(sign_up.notice_interval),
             reset_emails: Notices::new(password_reset.email_interval),
         }
@@ -301,6 +310,22 @@ impl Limits {
     pub fn may_email_reset(&self, address: &EmailAddress, now: Instant) -> bool {
         self.reset_emails.may_send(address, now)
     }
+
+    /// Counts a request of `user_id` at `now` to change their email address, unless they have
+    /// already made `email_change.max_per_account` within `email_change.window`: then it is
+    /// refused, and a new request is possible after the returned time.
+    pub fn admit_email_change(&self, user_id: Uuid, now: Instant) -> Result<(), Duration> {
+        let max = self.email_change.max_per_account;
+        self.email_changes
+            .update(user_id, now, |requests| {
+                if requests.len() >= max {
+                    return Err(self.email_changes.retry_after(requests, now));
+                }
+                requests.push_back(now);
+                Ok(())
+            })
+            .unwrap_or(Ok(()))
+    }
 }
 
 #[cfg(test)]
@@ -320,6 +345,7 @@ mod tests {
             &config,
             &config::SignIn::default(),
             &config::PasswordReset::default(),
+            &config::EmailChange::default(),
         )
     }
 
@@ -408,6 +434,7 @@ mod tests {
             &config::SignUp::default(),
             &config,
             &config::PasswordReset::default(),
+            &config::EmailChange::default(),
         )
     }
 
@@ -493,6 +520,7 @@ mod tests {
             &config::SignUp::default(),
             &config::SignIn::default(),
             &config,
+            &config::EmailChange::default(),
         )
     }
 
@@ -556,5 +584,32 @@ mod tests {
         // Sign-up's emails are counted on their own.
         assert!(limits.may_notify(&ann, start));
         assert!(limits.may_email_reset(&ann, start + Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn an_account_is_refused_email_changes_past_the_maximum_until_the_window_moves_on() {
+        let limits = Limits::new(
+            &config::SignUp::default(),
+            &config::SignIn::default(),
+            &config::PasswordReset::default(),
+            &config::EmailChange {
+                window: Duration::from_secs(60),
+                max_per_account: 2,
+            },
+        );
+        let start = Instant::now();
+        let at = |seconds| start + Duration::from_secs(seconds);
+        let (ann, bob) = (Uuid::new_v4(), Uuid::new_v4());
+
+        assert_eq!(limits.admit_email_change(ann, at(0)), Ok(()));
+        assert_eq!(limits.admit_email_change(ann, at(10)), Ok(()));
+        assert_eq!(
+            limits.admit_email_change(ann, at(20)),
+            Err(Duration::from_secs(40))
+        );
+        // Refused requests don't count, and other accounts are counted on their own.
+        assert_eq!(limits.admit_email_change(bob, at(20)), Ok(()));
+        // The first request has left the window.
+        assert_eq!(limits.admit_email_change(ann, at(60)), Ok(()));
     }
 }

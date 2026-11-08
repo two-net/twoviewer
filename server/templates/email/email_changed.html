@@ -1,0 +1,8 @@
+{% extends "email/layout.html" %}
+{%- block content -%}
+{%- let accent = crate::email::palette::ACCENT %}
+<h1>Your email address has changed</h1>
+<p>The email address of your TwoViewer account was changed from this one to {{ new_email }}. From now on, sign in with the new address. Emails about your account go there too.</p>
+<p>If you made this change, there is nothing else to do.</p>
+<p>If you didn't, someone else may be able to sign in to your account. If you are still signed in to TwoViewer in a browser, change the address back in <a class="tv-link" href="{{ settings_url }}" style="color:{{ accent.light }};">Settings</a>, and change your password.</p>
+{%- endblock %}

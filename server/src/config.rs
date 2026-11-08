@@ -50,6 +50,7 @@ pub struct Config {
     pub sign_in: SignIn,
     pub mfa: Mfa,
     pub password_reset: PasswordReset,
+    pub email_change: EmailChange,
     pub log: Log,
 }
 
@@ -346,6 +347,22 @@ pub struct PasswordReset {
     pub email_interval: Duration,
 }
 
+/// Changing the email address of an account (AUTH-11), and its protection against abuse.
+///
+/// Each request emails the new address, so requests are counted per account, in memory by each
+/// instance of the server, like password reset requests. The link works for
+/// `accounts.verification_link_lifetime`, like the one that verifies a new account's address.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmailChange {
+    /// The time over which requests from one account are counted.
+    #[serde(with = "humantime_serde")]
+    pub window: Duration,
+    /// How many requests one account may make within `window`, so that it cannot be used to send
+    /// email to many addresses. Further ones are refused until the window has moved on.
+    pub max_per_account: usize,
+}
+
 /// Operational logs (MNT-03), written to standard output.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -511,6 +528,15 @@ impl Default for PasswordReset {
     }
 }
 
+impl Default for EmailChange {
+    fn default() -> Self {
+        Self {
+            window: Duration::from_secs(60 * 60),
+            max_per_account: 5,
+        }
+    }
+}
+
 /// About 131,000 hashes on average. The web client computes about 190,000 per second with
 /// WebCrypto on a recent laptop, so this takes a second or two on most.
 const DEFAULT_CHALLENGE_DIFFICULTY: u32 = 17;
@@ -663,6 +689,7 @@ impl Config {
                 "password_reset.email_interval",
                 self.password_reset.email_interval,
             ),
+            ("email_change.window", self.email_change.window),
         ] {
             if value < Duration::from_millis(1) {
                 return Err(ConfigError::TooShort { key });
@@ -711,6 +738,10 @@ impl Config {
             (
                 "password_reset.max_tracked_networks",
                 self.password_reset.max_tracked_networks,
+            ),
+            (
+                "email_change.max_per_account",
+                self.email_change.max_per_account,
             ),
         ] {
             if value == 0 {
@@ -1449,6 +1480,32 @@ mod tests {
                 );
             });
         }
+    }
+
+    #[test]
+    fn email_change_limits_must_be_positive() {
+        jail(|jail| {
+            set_required(jail);
+            jail.set_env("TWOVIEWER_EMAIL_CHANGE__MAX_PER_ACCOUNT", "0");
+
+            assert!(matches!(
+                Config::load(),
+                Err(ConfigError::TooSmall {
+                    key: "email_change.max_per_account"
+                })
+            ));
+        });
+        jail(|jail| {
+            set_required(jail);
+            jail.set_env("TWOVIEWER_EMAIL_CHANGE__WINDOW", "0s");
+
+            assert!(matches!(
+                Config::load(),
+                Err(ConfigError::TooShort {
+                    key: "email_change.window"
+                })
+            ));
+        });
     }
 
     #[test]

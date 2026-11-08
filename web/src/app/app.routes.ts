@@ -83,6 +83,11 @@ export const routes: Routes = [
         loadComponent: () => import('./accounts/verify-email').then((m) => m.VerifyEmail),
       },
       {
+        path: 'confirm-email',
+        title: $localize`Confirm your new email address`,
+        loadComponent: () => import('./accounts/confirm-email').then((m) => m.ConfirmEmail),
+      },
+      {
         path: 'reset-password',
         title: $localize`Reset your password`,
         loadComponent: () => import('./accounts/reset-password').then((m) => m.ResetPassword),

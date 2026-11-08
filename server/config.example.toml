@@ -205,6 +205,16 @@ max_tracked_networks = 100000
 # to flood someone's inbox. Requests in between still get the same answer, but no email.
 email_interval = "5m"
 
+[email_change]
+# Changing the email address of an account (AUTH-11). Each request emails the new address, so
+# requests are counted per account, in memory by each instance. The emailed link works for
+# accounts.verification_link_lifetime.
+# The time over which requests from one account are counted.
+window = "1h"
+# How many requests one account may make within the window, so that it cannot be used to send
+# email to many addresses. Further ones are refused until the window has moved on.
+max_per_account = 5
+
 [log]
 # "json" (one object per line, for log collectors) or "text" (for development).
 format = "json"

@@ -1,0 +1,13 @@
+{% extends "email/layout.txt" %}
+{%- block subject %}Confirm your new email address for TwoViewer{% endblock %}
+{%- block content -%}
+Confirm your new email address
+
+Someone, probably you, asked to change the email address of a TwoViewer account to this one. To confirm that it is yours, open this link:
+
+{{ link }}
+
+The link works once, for {{ validity }} {% if in_hours %}{{ validity|pluralize("hour", "hours") }}{% else %}{{ validity|pluralize("minute", "minutes") }}{% endif %}. Until then, the account keeps its current address.
+
+If you didn't ask for this, you can ignore this email. Nothing changes.
+{%- endblock %}

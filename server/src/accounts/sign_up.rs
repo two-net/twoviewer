@@ -82,7 +82,7 @@ pub(super) async fn sign_up(
         Ok(hash) => hash,
         // `validate` has already checked the rules.
         Err(NewPasswordError::Rejected(rejected)) => {
-            return Err(ApiError::Invalid(password_error(rejected)));
+            return Err(ApiError::Invalid(password_error("password", rejected)));
         }
         Err(NewPasswordError::Hashing(err)) => return Err(ApiError::internal(err)),
     };
@@ -186,26 +186,26 @@ impl Accounts {
             })
             .ok();
 
-        let display_name = request.display_name.trim();
-        let max = self.config.display_name_max_length;
-        if display_name.is_empty() {
-            fields.insert("displayName", FieldError::new("required"));
-        } else if display_name.chars().count() > max {
-            fields.insert("displayName", FieldError::max("too_long", max));
-        } else if display_name.chars().any(char::is_control) {
-            fields.insert("displayName", FieldError::new("invalid"));
-        }
+        let display_name =
+            parse_display_name(&request.display_name, self.config.display_name_max_length)
+                .inspect_err(|error| {
+                    fields.insert("displayName", *error);
+                })
+                .ok();
 
         if let Err(rejected) = self.passwords.check_new(&request.password) {
-            fields.extend(password_error(rejected));
+            fields.extend(password_error("password", rejected));
         }
 
         if request.terms_version.is_empty() || request.privacy_version.is_empty() {
             fields.insert("terms", FieldError::new("required"));
         }
-        let Some(email) = email.filter(|_| fields.is_empty()) else {
+        let (Some(email), Some(display_name)) = (email, display_name) else {
             return Err(ApiError::Invalid(fields));
         };
+        if !fields.is_empty() {
+            return Err(ApiError::Invalid(fields));
+        }
         // The user accepted texts that have changed since: they must read the new ones.
         if request.terms_version != legal::TERMS_VERSION
             || request.privacy_version != legal::PRIVACY_VERSION
@@ -217,7 +217,7 @@ impl Accounts {
 
         Ok(Form {
             email,
-            display_name: display_name.to_owned(),
+            display_name,
             password: request.password.clone(),
         })
     }
@@ -259,6 +259,7 @@ impl Accounts {
             db,
             user_id,
             Purpose::VerifyEmail,
+            None,
             self.config.verification_link_lifetime,
         )
         .await
@@ -295,12 +296,28 @@ pub(super) fn parse_email(email: &str) -> Result<EmailAddress, FieldError> {
     }
 }
 
-/// Why `password` breaks the rules for new passwords. Password reset reports it this way too.
-pub(super) fn password_error(rejected: Rejected) -> FieldErrors {
+/// The display name typed in `name`, trimmed, or why it isn't one: it is required, has at most
+/// `max` characters, and no control characters. Changing the name checks it this way too.
+pub(super) fn parse_display_name(name: &str, max: usize) -> Result<String, FieldError> {
+    let name = name.trim();
+    if name.is_empty() {
+        Err(FieldError::new("required"))
+    } else if name.chars().count() > max {
+        Err(FieldError::max("too_long", max))
+    } else if name.chars().any(char::is_control) {
+        Err(FieldError::new("invalid"))
+    } else {
+        Ok(name.to_owned())
+    }
+}
+
+/// Why the new password in `field` breaks the rules for new passwords. Password reset and password
+/// change report it this way too.
+pub(super) fn password_error(field: &'static str, rejected: Rejected) -> FieldErrors {
     let error = match rejected {
         Rejected::TooShort { min } => FieldError::min("too_short", min),
         Rejected::TooLong { max } => FieldError::max("too_long", max),
         Rejected::Compromised => FieldError::new("compromised"),
     };
-    FieldErrors::from([("password", error)])
+    FieldErrors::from([(field, error)])
 }

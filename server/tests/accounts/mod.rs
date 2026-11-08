@@ -302,6 +302,50 @@ impl App {
             .await
     }
 
+    /// `PATCH /api/account` with `display_name`.
+    pub async fn change_display_name(&self, cookie: Option<&str>, display_name: &str) -> Answer {
+        self.send_json(
+            Method::PATCH,
+            "/api/account",
+            cookie,
+            json!({ "displayName": display_name }),
+        )
+        .await
+    }
+
+    /// `POST /api/account/email` with `email`.
+    pub async fn change_email(&self, cookie: &str, email: &str) -> Answer {
+        self.send_json(
+            Method::POST,
+            "/api/account/email",
+            Some(cookie),
+            json!({ "email": email }),
+        )
+        .await
+    }
+
+    /// `POST /api/account/email/confirm` with `token`, without a sign-in.
+    pub async fn confirm_email(&self, token: &str) -> Answer {
+        self.send_json(
+            Method::POST,
+            "/api/account/email/confirm",
+            None,
+            json!({ "token": token }),
+        )
+        .await
+    }
+
+    /// `POST /api/account/password` with the `current` and the `new` password.
+    pub async fn change_password(&self, cookie: &str, current: &str, new: &str) -> Answer {
+        self.send_json(
+            Method::POST,
+            "/api/account/password",
+            Some(cookie),
+            json!({ "currentPassword": current, "newPassword": new }),
+        )
+        .await
+    }
+
     /// `GET /api/mfa`.
     pub async fn mfa(&self, cookie: &str) -> Answer {
         self.request(Method::GET, "/api/mfa", Some(cookie), &[])

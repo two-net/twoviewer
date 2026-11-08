@@ -34,6 +34,9 @@
 //! waiting when the server crashes are lost; people ask for the link again.
 
 mod account_exists;
+mod confirm_email;
+mod email_changed;
+mod email_in_use;
 mod mailer;
 mod message;
 pub mod palette;
@@ -43,6 +46,9 @@ mod test_email;
 mod verify_email;
 
 pub use account_exists::AccountExists;
+pub use confirm_email::ConfirmEmail;
+pub use email_changed::EmailChanged;
+pub use email_in_use::EmailInUse;
 pub use mailer::{Mailer, SendError, SetupError};
 pub use message::{Content, Email};
 pub use reset_password::ResetPassword;
@@ -83,6 +89,24 @@ mod tests {
             ResetPassword {
                 link: "https://twoviewer.example/reset-password#0123",
                 valid_for: Duration::from_secs(60 * 60),
+            }
+            .render()
+            .unwrap(),
+            ConfirmEmail {
+                link: "https://twoviewer.example/confirm-email#0123",
+                valid_for: Duration::from_secs(24 * 60 * 60),
+            }
+            .render()
+            .unwrap(),
+            EmailInUse {
+                sign_in_url: "https://twoviewer.example/sign-in",
+                reset_url: "https://twoviewer.example/reset-password",
+            }
+            .render()
+            .unwrap(),
+            EmailChanged {
+                new_email: "ann.new@example.com",
+                settings_url: "https://twoviewer.example/settings",
             }
             .render()
             .unwrap(),

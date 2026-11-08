@@ -106,6 +106,7 @@ pub(super) async fn request(
                 &txn,
                 user.id,
                 Purpose::ResetPassword,
+                None,
                 accounts.password_reset.link_lifetime,
             )
             .await?;
@@ -237,7 +238,9 @@ pub(super) async fn complete(
     let password_hash = match accounts.passwords.hash_new(&request.password).await {
         Ok(hash) => hash,
         Err(NewPasswordError::Rejected(rejected)) => {
-            return Err(ApiError::Invalid(sign_up::password_error(rejected)));
+            return Err(ApiError::Invalid(sign_up::password_error(
+                "password", rejected,
+            )));
         }
         Err(NewPasswordError::Hashing(err)) => return Err(ApiError::internal(err)),
     };
@@ -258,16 +261,7 @@ pub(super) async fn complete(
     }
     user.update(&txn).await?;
     // None of the account's reset links works any more, so they all count as used.
-    email_link::Entity::update_many()
-        .set(email_link::ActiveModel {
-            used_at: Set(Some(now)),
-            ..Default::default()
-        })
-        .filter(email_link::Column::UserId.eq(user_id))
-        .filter(email_link::Column::Purpose.eq(Purpose::ResetPassword))
-        .filter(email_link::Column::UsedAt.is_null())
-        .exec(&txn)
-        .await?;
+    email_link::use_up(&txn, user_id, Some(Purpose::ResetPassword)).await?;
 
     let actor = Actor::User {
         id: user_id,

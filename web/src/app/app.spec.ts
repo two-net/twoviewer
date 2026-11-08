@@ -46,6 +46,7 @@ describe('App', () => {
     '/sign-in',
     '/sign-up',
     '/verify-email',
+    '/confirm-email',
     '/reset-password',
     '/host',
     '/terms',
